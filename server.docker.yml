@@ -1,0 +1,86 @@
+rtmp:
+  enabled: false
+  addr: ":1935"
+
+http:
+  addr: ":8080"
+
+redis:
+  addr: "redis:6379"
+  password: ""
+  db: 0
+
+node:
+  id: "node-1"
+  http_addr: "server:8080"
+  role: "master"
+  heartbeat_interval: 5s
+
+topology:
+  region: "docker-dev"
+  az: "docker-dev-1a"
+
+ha:
+  dependency_timeout_ms: 1200
+  lease_ttl_seconds: 90
+  lease_clock_skew_seconds: 15
+  lease_token_secret: "dev-only-change-me"
+  idempotency_ttl_seconds: 180
+  idempotency_max_keys: 20000
+
+slo:
+  api_availability_target: 99.95
+  stream_start_success_target: 99.9
+  first_frame_p95_ms_target: 2500
+  reconnect_success_target: 99.9
+
+hls:
+  root_path: "/app/hls"
+  segment_duration: 2
+  max_segments: 5
+
+storage:
+  root_path: "/app/storage"
+
+minio:
+  endpoint: "minio:9000"
+  access_key: "minioadmin"
+  secret_key: "minioadmin"
+  bucket: "recordings"
+  use_ssl: false
+  segment_duration: 10
+  presign_expiry: 60
+  enabled: false
+
+media_mtx:
+  enabled: true
+  api_base_url: "http://mediamtx:9997"
+  hls_base_url: "http://localhost:8888"
+  webrtc_base_url: "http://localhost:8889"
+  rtsp_base_url: "rtsp://localhost:8554"
+  rtmp_base_url: "rtmp://localhost:1935"
+  playback_base_url: "http://localhost:9996"
+  playback_format: "mp4"
+
+pion_webrtc:
+  enabled: true
+  public_base_url: "http://localhost:8080"
+  source_rtsp_base_url: "rtsp://mediamtx:8554"
+  ice_servers:
+    - "stun:stun.l.google.com:19302"
+  session_ttl_seconds: 120
+
+logging:
+  level: "info"
+  dir: "/app/logs"
+  info_file: "info.log"
+  error_file: "error.log"
+  stat_file: "stat.log"
+  slow_file: "slow.log"
+  slow_threshold_ms: 1000
+  stat_interval_sec: 30
+  telemetry:
+    enabled: false
+    endpoint: ""
+    timeout_ms: 1500
+    queue_size: 2048

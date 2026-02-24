@@ -1,0 +1,40 @@
+logLevel: info
+logDestinations: [stdout]
+
+# Live protocols
+rtsp: yes
+rtspAddress: :8554
+
+rtmp: yes
+rtmpAddress: :1935
+
+hls: yes
+hlsAddress: :8888
+
+webrtc: yes
+webrtcAddress: :8889
+
+# Control/data APIs
+api: yes
+apiAddress: :9997
+
+playback: yes
+playbackAddress: :9996
+
+# No-auth mode (temporary): no auth users configured.
+
+pathDefaults:
+  source: publisher
+  record: yes
+  recordPath: /recordings/%path/%Y-%m-%d_%H-%M-%S-%f
+  recordFormat: fmp4
+  recordPartDuration: 1s
+  recordSegmentDuration: 1m
+  recordDeleteAfter: 72h
+  # Notify Go server when a camera starts/stops publishing.
+  # The Go server pulls RTSP from MediaMTX and feeds its own subscriber pipeline.
+  runOnPublish: curl -sf -X POST "http://localhost:8080/internal/on-publish?path=$MTX_PATH"
+  runOnUnpublish: curl -sf -X POST "http://localhost:8080/internal/on-unpublish?path=$MTX_PATH"
+
+paths:
+  all:

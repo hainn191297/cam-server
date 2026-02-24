@@ -1,0 +1,23 @@
+{"level":"info","msg":"starting node=node-1 role=master","time":"2026-02-24T18:58:55.290351+07:00"}
+{"level":"info","msg":"minio: disabled — recordings stored locally only","time":"2026-02-24T18:58:55.290722+07:00"}
+{"level":"info","msg":"node-registry: disabled (no Redis)","time":"2026-02-24T18:58:57.29279+07:00"}
+{"level":"info","msg":"http: starting on :8080","time":"2026-02-24T18:58:57.293646+07:00"}
+{"level":"info","msg":"received signal interrupt, shutting down","time":"2026-02-24T18:58:59.159018+07:00"}
+{"level":"info","msg":"shutdown complete","time":"2026-02-24T18:58:59.159277+07:00"}
+{"level":"info","msg":"starting node=node-1 role=master","time":"2026-02-24T19:00:11.100862+07:00"}
+{"level":"info","msg":"minio: disabled — recordings stored locally only","time":"2026-02-24T19:00:11.101226+07:00"}
+{"level":"info","msg":"redis: connected to localhost:6379","time":"2026-02-24T19:00:11.108448+07:00"}
+{"level":"info","msg":"node-registry: started (redis=localhost:6379)","time":"2026-02-24T19:00:11.108509+07:00"}
+{"level":"info","msg":"http: starting on :8080","time":"2026-02-24T19:00:11.108796+07:00"}
+{"level":"info","msg":"received signal interrupt, shutting down","time":"2026-02-24T19:09:24.187235+07:00"}
+{"level":"info","msg":"shutdown: deregistering node","time":"2026-02-24T19:09:24.188167+07:00"}
+{"level":"info","msg":"node-registry: deregistered node-1","time":"2026-02-24T19:09:24.458648+07:00"}
+{"level":"info","msg":"shutdown complete","time":"2026-02-24T19:09:24.659026+07:00"}
+{"level":"info","msg":"starting node=node-1 role=master","time":"2026-02-24T19:09:29.100866+07:00"}
+{"level":"info","msg":"minio: disabled — recordings stored locally only","time":"2026-02-24T19:09:29.100967+07:00"}
+{"level":"info","msg":"redis: connected to localhost:6379","time":"2026-02-24T19:09:29.106398+07:00"}
+{"level":"info","msg":"node-registry: started (redis=localhost:6379)","time":"2026-02-24T19:09:29.106429+07:00"}
+{"level":"info","msg":"http: starting on :8080","time":"2026-02-24T19:09:29.106549+07:00"}
+{"level":"info","msg":"received signal interrupt, shutting down","time":"2026-02-24T19:09:39.997359+07:00"}
+{"level":"info","msg":"shutdown: deregistering node","time":"2026-02-24T19:09:39.998437+07:00"}
+{"level":"info","msg":"shutdown complete","time":"2026-02-24T19:09:40.624056+07:00"}

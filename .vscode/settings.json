@@ -1,0 +1,12 @@
+{
+  "go.useLanguageServer": true,
+  "go.toolsManagement.autoUpdate": true,
+  "go.formatTool": "gofmt",
+  "go.lintTool": "staticcheck",
+  "go.testFlags": [
+    "-count=1"
+  ],
+  "go.testEnvVars": {
+    "GOCACHE": "/tmp/go-build"
+  }
+}

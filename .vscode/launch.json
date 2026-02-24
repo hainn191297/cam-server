@@ -1,0 +1,19 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug go-cam-server",
+      "type": "go",
+      "request": "launch",
+      "mode": "auto",
+      "program": "${workspaceFolder}/cmd/server",
+      "args": [
+        "-config",
+        "server.yml"
+      ],
+      "env": {
+        "GOCACHE": "/tmp/go-build"
+      }
+    }
+  ]
+}

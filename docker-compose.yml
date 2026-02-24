@@ -1,0 +1,64 @@
+services:
+  redis:
+    image: redis:7.4-alpine
+    container_name: go-cam-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:latest
+    container_name: go-cam-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+    restart: unless-stopped
+
+  mediamtx:
+    image: bluenviron/mediamtx:1.16.1
+    container_name: go-cam-mediamtx
+    ports:
+      - "1935:1935" # RTMP ingest
+      - "8554:8554" # RTSP
+      - "8888:8888" # HLS
+      - "8889:8889" # WebRTC
+      - "9996:9996" # Playback
+      - "9997:9997" # API
+    volumes:
+      - ./mediamtx.yml:/mediamtx.yml:ro
+      - recordings-data:/recordings
+    restart: unless-stopped
+
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: go-cam-server
+    depends_on:
+      - redis
+      - minio
+      - mediamtx
+    ports:
+      - "8080:8080"
+    volumes:
+      - hls-data:/app/hls
+      - storage-data:/app/storage
+      - logs-data:/app/logs
+    restart: unless-stopped
+
+volumes:
+  redis-data:
+  minio-data:
+  recordings-data:
+  hls-data:
+  storage-data:
+  logs-data:
