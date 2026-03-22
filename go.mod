@@ -10,17 +10,23 @@ require (
 	github.com/pion/rtp v1.10.1
 	github.com/pion/webrtc/v4 v4.2.7
 	github.com/redis/go-redis/v9 v9.18.0
+	github.com/ritj/onvif v0.0.10
 	github.com/sirupsen/logrus v1.7.0
+	github.com/use-go/onvif v0.0.9
 	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
+	github.com/beevik/etree v1.4.1 // indirect
 	github.com/bluenviron/mediacommon/v2 v2.7.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
+	github.com/elgs/gostrgen v0.0.0-20220325073726-0c3e00d082f6 // indirect
 	github.com/go-ini/ini v1.67.0 // indirect
+	github.com/gofrs/uuid v4.4.0+incompatible // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
+	github.com/juju/errors v1.0.0 // indirect
 	github.com/klauspost/compress v1.18.2 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.11 // indirect
 	github.com/klauspost/crc32 v1.3.0 // indirect

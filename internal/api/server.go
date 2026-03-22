@@ -170,6 +170,15 @@ func (s *Server) buildRouter() *chi.Mux {
 
 		r.Get("/monitor/priority", s.monitorPriority)
 		r.Put("/monitor/weights", s.updateWeights)
+
+		// ── Camera adapter API (ONVIF, manual, future adapters) ─────────────
+		r.Get("/onvif/discover", s.onvifDiscover)
+		r.Get("/onvif/info", s.onvifGetInfo)
+		r.Get("/onvif/snapshot", s.onvifSnapshot)
+		r.Post("/onvif/ptz", s.onvifPTZ)
+		r.Post("/onvif/reboot", s.onvifReboot)
+		r.Post("/onvif/resolve", s.onvifResolve)
+		r.Post("/camera/resolve", s.cameraResolve)
 	})
 
 	return r

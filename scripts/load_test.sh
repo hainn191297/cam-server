@@ -20,7 +20,6 @@ for i in $(seq 1 $CAMS); do
 done
 
 echo "All $CAMS streams started in background (PIDs: $PIDS)."
-echo "You can now run: go tool pprof http://localhost:8080/debug/pprof/profile?seconds=20"
 
 # Wait for all background streams
 trap "echo 'Stopping all streams...'; kill $PIDS 2>/dev/null; exit 0" INT TERM
