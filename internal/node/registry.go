@@ -27,8 +27,11 @@ import (
 )
 
 const (
-	nodeTTL   = 15 * time.Second
-	streamTTL = 30 * time.Second
+	nodeTTL          = 15 * time.Second
+	streamTTL        = 30 * time.Second
+	nodeKeyPattern   = "node:%s"
+	nodeScanPattern  = "node:*"
+	streamKeyPattern = "stream:%s"
 )
 
 // NodeInfo describes a single VMS node in the cluster.
@@ -76,21 +79,21 @@ func (r *Registry) Stop() {
 // AnnounceStream writes stream:{key} → nodeID into Redis.
 // Called by the RTMP handler when a camera publishes.
 func (r *Registry) AnnounceStream(ctx context.Context, streamKey string) error {
-	key := fmt.Sprintf("stream:%s", streamKey)
+	key := fmt.Sprintf(streamKeyPattern, streamKey)
 	return r.rdb.Set(ctx, key, r.self.ID, streamTTL).Err()
 }
 
 // RevokeStream deletes stream:{key} from Redis.
 // Called by the RTMP handler OnClose.
 func (r *Registry) RevokeStream(ctx context.Context, streamKey string) error {
-	key := fmt.Sprintf("stream:%s", streamKey)
+	key := fmt.Sprintf(streamKeyPattern, streamKey)
 	return r.rdb.Del(ctx, key).Err()
 }
 
 // FindStream returns the node ID that owns the given stream.
 // Returns ("", ErrStreamNotFound) if the stream is not live anywhere.
 func (r *Registry) FindStream(ctx context.Context, streamKey string) (string, error) {
-	key := fmt.Sprintf("stream:%s", streamKey)
+	key := fmt.Sprintf(streamKeyPattern, streamKey)
 	nodeID, err := r.rdb.Get(ctx, key).Result()
 	if err == redis.Nil {
 		return "", fmt.Errorf("stream %q not found in cluster", streamKey)
@@ -100,7 +103,7 @@ func (r *Registry) FindStream(ctx context.Context, streamKey string) (string, er
 
 // AllNodes returns all live nodes currently registered in Redis.
 func (r *Registry) AllNodes(ctx context.Context) ([]NodeInfo, error) {
-	keys, err := r.rdb.Keys(ctx, "node:*").Result()
+	keys, err := r.rdb.Keys(ctx, nodeScanPattern).Result()
 	if err != nil {
 		return nil, err
 	}
@@ -135,7 +138,7 @@ func (r *Registry) heartbeat(streamCount func() int) {
 		r.self.UpdatedAt = time.Now()
 
 		data, _ := json.Marshal(r.self)
-		key := fmt.Sprintf("node:%s", r.self.ID)
+		key := fmt.Sprintf(nodeKeyPattern, r.self.ID)
 		if err := r.rdb.Set(ctx, key, data, nodeTTL).Err(); err != nil {
 			logrus.Warnf("node-registry: heartbeat failed: %v", err)
 		}
@@ -148,7 +151,7 @@ func (r *Registry) heartbeat(streamCount func() int) {
 			publish()
 		case <-r.stop:
 			// Deregister immediately on shutdown
-			key := fmt.Sprintf("node:%s", r.self.ID)
+			key := fmt.Sprintf(nodeKeyPattern, r.self.ID)
 			_ = r.rdb.Del(ctx, key)
 			logrus.Infof("node-registry: deregistered %s", r.self.ID)
 			return

@@ -69,17 +69,27 @@ type Server struct {
 	weightsStore *weightsStore
 }
 
-func NewServer(
-	cfg *config.Config,
-	manager *stream.StreamManager,
-	rdb *redis.Client,
-	registry *node.Registry,
-	mediamtxClient *vmsmediamtx.Client,
-	minioClient *vmsminio.Client,
-	pionService *pionbridge.Service,
-	subFactory *subscriber.Factory,
-	ingestMgr *vmsrtsp.IngestManager,
-) *Server {
+type Dependencies struct {
+	Manager     *stream.StreamManager
+	Redis       *redis.Client
+	Registry    *node.Registry
+	MediaMTX    *vmsmediamtx.Client
+	MinIO       *vmsminio.Client
+	Pion        *pionbridge.Service
+	Subscribers *subscriber.Factory
+	Ingest      *vmsrtsp.IngestManager
+}
+
+func NewServer(cfg *config.Config, deps Dependencies) *Server {
+	manager := deps.Manager
+	rdb := deps.Redis
+	registry := deps.Registry
+	mediamtxClient := deps.MediaMTX
+	minioClient := deps.MinIO
+	pionService := deps.Pion
+	subFactory := deps.Subscribers
+	ingestMgr := deps.Ingest
+
 	if subFactory == nil {
 		subFactory = subscriber.NewFactory(minioClient, cfg.MinIO.SegmentDuration)
 	}
@@ -91,7 +101,7 @@ func NewServer(
 		})
 	}
 
-	deps := buildDependencies(rdb, mediamtxClient, minioClient)
+	healthDeps := buildDependencies(rdb, mediamtxClient, minioClient)
 	dependencyTimeout := time.Duration(cfg.HA.DependencyTimeoutMs) * time.Millisecond
 	idempotencyTTL := time.Duration(cfg.HA.IdempotencyTTLSeconds) * time.Second
 	leaseTTL := time.Duration(cfg.HA.LeaseTTLSeconds) * time.Second
@@ -107,7 +117,7 @@ func NewServer(
 		minio:         minioClient,
 		pion:          pionService,
 		ingest:        ingestMgr,
-		healthMonitor: ha.NewMonitor(dependencyTimeout, deps),
+		healthMonitor: ha.NewMonitor(dependencyTimeout, healthDeps),
 		idempotency:   ha.NewIdempotencyStore(idempotencyTTL, cfg.HA.IdempotencyMaxKeys),
 		leaseService:  ha.NewLeaseService(rdb, leaseTTL, leaseSkew, cfg.HA.LeaseTokenSecret),
 		pins:          newPinStore(),

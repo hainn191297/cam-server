@@ -2,7 +2,9 @@
 
 ## 1. Mục tiêu hệ thống
 
-`go-cam-server` là control plane và stream gateway cho hệ thống camera:
+`go-cam-server` hiện được thiết kế trước hết để phục vụ hệ thống camera, nhưng kiến trúc không khóa chặt vào camera-only. Về lâu dài, cùng một control plane này có thể mở rộng để quản lý thêm các nguồn streaming khác nếu cần.
+
+Trong trạng thái hiện tại, `go-cam-server` đóng vai trò control plane và stream gateway:
 
 - nhận trạng thái stream từ `MediaMTX`
 - kéo lại stream qua RTSP để đưa vào pipeline Go nội bộ
@@ -10,7 +12,12 @@
 - cung cấp HTTP API cho monitor, playback, node registry, health, WebRTC signaling
 - giữ khả năng thay `MediaMTX` bằng media backend khác về sau
 
-Kiến trúc hiện tại sử dụng ngôn ngữ Golang, khá dễ bảo trì, được gom lại theo hướng dễ maintain hơn, ít phân mảnh hơn, và tập trung control logic vào một đầu mối rõ ràng:
+So với mô hình cũ phân tán logic giữa nhiều service/backend khác nhau, kiến trúc hiện tại được gom lại theo hướng:
+
+- dễ bảo trì hơn
+- ít phân mảnh hơn
+- tập trung control logic vào một đầu mối rõ ràng
+- vẫn giữ media plane tách riêng để không khóa chết khả năng thay đổi backend
 
 - `MediaMTX` = media plane
 - `go-cam-server` = control plane
@@ -18,6 +25,8 @@ Kiến trúc hiện tại sử dụng ngôn ngữ Golang, khá dễ bảo trì, 
 ---
 
 ## 2. Topology tổng thể
+
+Sơ đồ dưới đây mô tả runtime topology ở mức hệ thống. Ý chính là `go-cam-server` không trực tiếp thay thế media server, mà đứng giữa client và hạ tầng media để điều phối stream, health, playback, relay và các policy runtime.
 
 ```text
                          +----------------------+
@@ -53,8 +62,10 @@ Kiến trúc hiện tại sử dụng ngôn ngữ Golang, khá dễ bảo trì, 
                        RTMP / RTSP / ONVIF
                              |
                     +----------------------+
-                    | Streaming Sources    |
+                    | Camera Systems       |
                     | RTSP / RTMP / ONVIF  |
+                    | extensible to other  |
+                    | streaming sources    |
                     +----------------------+
 ```
 
@@ -62,10 +73,10 @@ Kiến trúc hiện tại sử dụng ngôn ngữ Golang, khá dễ bảo trì, 
 
 ## 3. Runtime deployment
 
-Theo [docker-compose.yml](/Users/steven/Documents/learn/cam/go-cam-server/docker-compose.yml), stack local hiện có 4 service chính:
+Theo [docker-compose.yml](/Users/steven/Documents/learn/cam/go-cam-server/docker-compose.yml), stack local hiện có 4 service chính. Cách tách này phản ánh đúng chủ đích kiến trúc: media plane, control plane, registry/state store, object storage.
 
 - `mediamtx`
-  media plane, nhận RTMP ingest, expose RTSP/HLS/WebRTC/playback/API
+  media plane, nhận ingest và expose RTSP/HLS/WebRTC/playback/API
 - `server`
   `go-cam-server`, expose HTTP API control plane ở cổng `8080`
 - `redis`
@@ -75,11 +86,20 @@ Theo [docker-compose.yml](/Users/steven/Documents/learn/cam/go-cam-server/docker
 
 Tất cả chạy trong Docker network riêng `go-cam-network`.
 
+Trong production, topology này có thể scale theo hướng:
+
+- nhiều `mediamtx` node phía media plane
+- một hoặc nhiều `go-cam-server` node phía control plane
+- Redis dùng cho discovery/ownership tạm thời
+- MinIO hoặc object storage tương đương cho playback/archive
+
 ---
 
 ## 4. Luồng live stream
 
-### 4.1 Camera -> MediaMTX -> Go pipeline
+### 4.1 Camera-first ingest path
+
+Luồng hiện tại tối ưu cho camera systems: camera hoặc encoder đẩy stream vào `MediaMTX`, sau đó `go-cam-server` kéo lại stream để đưa vào pipeline Go nội bộ. Cách này giúp `MediaMTX` xử lý phần media transport, còn `go-cam-server` tập trung vào orchestration và delivery logic.
 
 ```text
 Camera / Encoder
@@ -108,7 +128,7 @@ Chi tiết entrypoint nằm ở [main.go](/Users/steven/Documents/learn/cam/go-c
 
 ### 4.2 Stream pipeline trong Go
 
-`go-cam-server` dùng mô hình publisher/subscriber:
+Sau khi stream vào `go-cam-server`, toàn bộ fan-out được gom về một mô hình publisher/subscriber thuần Go. Đây là lõi mà project đang kiểm soát trực tiếp và cũng là nơi phù hợp để cắm tracing, profiling, scoring, relay và policy runtime.
 
 - `StreamManager`
   registry in-process của tất cả stream đang live
@@ -127,13 +147,16 @@ Code chính:
 Thiết kế hiện tại ưu tiên:
 
 - đơn giản về ownership
-- tách rõ publisher và subscriber
+- tách rõ media ingestion và media fan-out
 - có thể profile theo từng stream
 - dễ gắn trace/log toàn trình
+- đủ generic để mở rộng sang streaming sources khác về sau
 
 ---
 
 ## 5. Delivery paths
+
+Section này mô tả các đường phân phối chính sau khi stream đã vào pipeline nội bộ. Chúng là các “consumer path” khác nhau của cùng một live stream.
 
 ### 5.1 HLS
 
@@ -149,7 +172,7 @@ Code:
 
 ### 5.2 Local archive
 
-`StorageSubscriber` ghi full FLV archive ra local disk:
+`StorageSubscriber` ghi full FLV archive ra local disk. Đây là đường đơn giản nhất để giữ raw-ish archive phục vụ debug hoặc playback local.
 
 - output local: `./data/storage/{streamKey}/`
 - endpoint phục vụ: `GET /storage/{key}/{file}`
@@ -160,7 +183,7 @@ Code:
 
 ### 5.3 Object storage
 
-`MinIOSubscriber` gom packet thành segment trong memory rồi upload lên MinIO:
+`MinIOSubscriber` gom packet thành segment trong memory rồi upload lên MinIO. Đây là đường storage thích hợp hơn cho scale-out và playback dựa trên object storage.
 
 - object path logic nằm trong `internal/minio`
 - dùng cho playback/object-based storage về sau
@@ -172,7 +195,7 @@ Code:
 
 ### 5.4 WebRTC signaling
 
-`go-cam-server` có lớp signaling riêng cho Pion:
+`go-cam-server` có lớp signaling riêng cho Pion. Ý nghĩa của phần này là giữ signaling/policy ở control plane, thay vì buộc client nói chuyện trực tiếp với media backend theo cách khó kiểm soát hơn.
 
 - offer endpoint: `POST /pion/webrtc/{key}/offer`
 - close session: `DELETE /pion/webrtc/session/{id}`
@@ -186,6 +209,8 @@ Code:
 ---
 
 ## 6. Multi-node và service discovery
+
+Phần này giải thích cách hệ thống nhìn nhận cluster ở thời điểm hiện tại: ưu tiên đơn giản, dễ vận hành, và đủ tốt cho stream discovery/relay, chưa đi theo hướng consensus chặt như một control plane phân tán hoàn chỉnh.
 
 ### 6.1 Redis registry
 
@@ -204,11 +229,11 @@ Mục tiêu hiện tại:
 - tìm stream đang nằm ở node nào
 - phục vụ relay và monitor cluster
 
-Lưu ý: đây là registry best-effort, chưa phải distributed coordination correctness-critical như `etcd`.
+Lưu ý: đây là registry best-effort, chưa phải distributed coordination correctness-critical như `etcd`. Nó phù hợp cho stream presence và ownership tạm thời, nhưng chưa phải nơi nên đặt các quyết định coordination cần correctness rất cao.
 
 ### 6.2 Relay giữa node
 
-Khi stream không ở local node:
+Khi stream không ở local node, `go-cam-server` dùng HTTP relay để “local hóa” stream đó sang node đang phục vụ request. Mục tiêu là giữ cho phía client luôn nói chuyện với local node, còn việc kéo stream từ node khác được xử lý bên trong cluster.
 
 1. API tra Redis để biết `sourceNodeID`
 2. `RelayManager` mở HTTP relay tới node nguồn
@@ -226,7 +251,7 @@ Code:
 
 Router chính nằm ở [server.go](/Users/steven/Documents/learn/cam/go-cam-server/internal/api/server.go).
 
-Các nhóm API chính:
+Các nhóm API chính phản ánh đúng vai trò control plane của `go-cam-server`:
 
 - Control plane
   - `/control/health`
@@ -255,11 +280,16 @@ Các nhóm API chính:
   - `/internal/on-publish`
   - `/internal/on-unpublish`
 
+Nói ngắn gọn:
+
+- client nhìn thấy `go-cam-server` như cửa vào control/API
+- `MediaMTX` chủ yếu đứng sau như media engine
+
 ---
 
 ## 8. Monitor priority model
 
-Monitor grid không chọn stream theo thứ tự cố định. Nó dùng scoring runtime để xếp hạng stream theo mức độ quan trọng.
+Monitor grid không chọn stream theo thứ tự cố định. Thay vào đó, hệ thống dùng scoring runtime để quyết định stream nào nên được ưu tiên hiển thị trước. Đây là một phần rất “camera-system oriented” của kiến trúc hiện tại, vì nó phục vụ use case monitor wall/operator dashboard.
 
 Code:
 
@@ -276,7 +306,7 @@ Các yếu tố hiện tại:
 
 `manual_pin` là cờ operator gắn tay để giữ camera quan trọng luôn nổi lên.
 
-`motion_activity` hiện chưa nối với nguồn event thật, nhưng đã được chừa weight và API model để mở rộng về sau.
+`motion_activity` hiện chưa nối với nguồn event thật, nhưng đã được chừa weight và API model để mở rộng về sau. Đây là điểm nối tự nhiên giữa stream control plane và AI/detection plane.
 
 ---
 
@@ -284,7 +314,7 @@ Các yếu tố hiện tại:
 
 ### 9.1 Tracing
 
-Project đã có nền trace context nhẹ để nối log toàn trình:
+Project đã có nền trace context nhẹ để nối log toàn trình. Ý nghĩa của lớp này là chuẩn bị cho distributed tracing sau này mà chưa bắt buộc phải kéo cả stack observability lớn vào quá sớm.
 
 - `traceparent`
 - `trace_id`
@@ -319,6 +349,8 @@ Runtime stats emitter được khởi tạo ở [main.go](/Users/steven/Document
 - goroutine count
 - heap / GC stats
 
+Ý nghĩa của phần này là: stream pipeline phải quan sát được bằng số liệu runtime thực tế, không chỉ bằng log sự kiện.
+
 ### 9.3 Health
 
 `go-cam-server` monitor dependency health cho:
@@ -331,6 +363,8 @@ Code:
 
 - [control.go](/Users/steven/Documents/learn/cam/go-cam-server/internal/api/control.go)
 - [health.go](/Users/steven/Documents/learn/cam/go-cam-server/internal/ha/health.go)
+
+Health ở đây không chỉ là “service còn sống không”, mà còn là foundation cho degraded mode và operational decision về sau.
 
 ---
 
@@ -347,17 +381,18 @@ Tài liệu build riêng:
 - [MEDIAMTX.md](/Users/steven/Documents/learn/cam/go-cam-server/MEDIAMTX.md)
 - [Dockerfile.mediamtx](/Users/steven/Documents/learn/cam/go-cam-server/Dockerfile.mediamtx)
 
-Đây là điểm rất quan trọng để về sau:
+Ý nghĩa của hướng này là:
 
 - thay `MediaMTX` bằng backend media khác
 - chạy nhiều node MediaMTX
 - thêm policy/control logic mà không phá media plane
+- vẫn giữ `go-cam-server` là lớp ổn định hơn ở phía business/control
 
 ---
 
 ## 11. AI event extension point
 
-Hiện trong repo chưa có `AiEventService` thật, nhưng kiến trúc đã có chỗ để gắn AI event vào monitor/control plane mà không phải đập lại stream pipeline.
+Hiện trong repo chưa có `AiEventService` thật, nhưng kiến trúc đã có chỗ để gắn AI event vào monitor/control plane mà không phải đập lại stream pipeline. Đây là phần mở rộng rất phù hợp nếu hệ thống camera sau này cần detection, alarm hoặc automated prioritization.
 
 Hướng mở rộng đề xuất:
 
@@ -392,6 +427,8 @@ go-cam-server
 
 ## 12. Cấu trúc module hiện tại
 
+Phần này giúp đọc nhanh trách nhiệm chính của từng module trong codebase hiện tại.
+
 ```text
 go-cam-server/
 ├── cmd/server                # entrypoint
@@ -421,3 +458,4 @@ go-cam-server/
 3. Stream pipeline trong Go phải quan sát được bằng log/trace/profile.
 4. Multi-node ưu tiên đơn giản và thực dụng trước, correctness-critical coordination tính sau.
 5. AI event nên được thêm như một input signal vào control plane, không làm bẩn media pipeline lõi.
+6. Hệ thống hiện phục vụ camera systems trước, nhưng nên giữ abstraction đủ tốt để mở rộng sang streaming sources khác khi cần.

@@ -131,7 +131,16 @@ func main() {
 	}
 
 	// ─── HTTP API Server ──────────────────────────────────────────────────────
-	apiServer := api.NewServer(cfg, manager, rdb, registry, mtxClient, minioClient, pionService, subFactory, ingestMgr)
+	apiServer := api.NewServer(cfg, api.Dependencies{
+		Manager:     manager,
+		Redis:       rdb,
+		Registry:    registry,
+		MediaMTX:    mtxClient,
+		MinIO:       minioClient,
+		Pion:        pionService,
+		Subscribers: subFactory,
+		Ingest:      ingestMgr,
+	})
 
 	// ─── Graceful shutdown ────────────────────────────────────────────────────
 	sigCh := make(chan os.Signal, 1)
