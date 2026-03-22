@@ -35,12 +35,12 @@ slo:
   reconnect_success_target: 99.9
 
 hls:
-  root_path: "./hls"
+  root_path: "./data/hls"
   segment_duration: 2
   max_segments: 5
 
 storage:
-  root_path: "./storage"
+  root_path: "./data/storage"
 
 minio:
   endpoint: "localhost:9000"
@@ -78,7 +78,7 @@ pion_webrtc:
 
 logging:
   level: "info"
-  dir: "./logs"
+  dir: "./data/logs"
   info_file: "info.log"
   error_file: "error.log"
   stat_file: "stat.log"

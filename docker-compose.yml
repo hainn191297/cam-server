@@ -6,7 +6,7 @@ services:
     ports:
       - "6379:6379"
     volumes:
-      - redis-data:/data
+      - ./data/redis:/data
     networks:
       - cam-net
     restart: unless-stopped
@@ -22,7 +22,7 @@ services:
       - "9000:9000"
       - "9001:9001"
     volumes:
-      - minio-data:/data
+      - ./data/minio:/data
     networks:
       - cam-net
     restart: unless-stopped
@@ -41,7 +41,7 @@ services:
       - "9997:9997" # API
     volumes:
       - ./mediamtx.yml:/mediamtx.yml:ro
-      - recordings-data:/recordings
+      - ./data/recordings:/recordings
     networks:
       - cam-net
     healthcheck:
@@ -53,6 +53,7 @@ services:
     restart: unless-stopped
 
   server:
+    profiles: ["app"]
     build:
       context: .
       dockerfile: Dockerfile
@@ -67,9 +68,9 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      - hls-data:/app/hls
-      - storage-data:/app/storage
-      - logs-data:/app/logs
+      - ./data/hls:/app/hls
+      - ./data/storage:/app/storage
+      - ./data/logs:/app/logs
     networks:
       - cam-net
     restart: unless-stopped
@@ -79,10 +80,4 @@ networks:
     name: go-cam-network
     driver: bridge
 
-volumes:
-  redis-data:
-  minio-data:
-  recordings-data:
-  hls-data:
-  storage-data:
-  logs-data:
+

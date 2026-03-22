@@ -4,17 +4,19 @@ WORKDIR /src
 
 RUN apk add --no-cache ca-certificates
 
+COPY VERSION /tmp/project-version
 COPY third_party/mediamtx/go.mod third_party/mediamtx/go.sum ./third_party/mediamtx/
 WORKDIR /src/third_party/mediamtx
 RUN go mod download
 
 COPY third_party/mediamtx/ ./
 
+RUN install -Dm644 /tmp/project-version /src/third_party/mediamtx/internal/core/VERSION
 RUN CGO_ENABLED=0 go build -tags enable_upgrade -o /out/mediamtx .
 
 FROM alpine:3.22
 
-RUN apk add --no-cache ca-certificates tzdata wget
+RUN apk add --no-cache ca-certificates tzdata wget curl ffmpeg
 
 COPY --from=builder /out/mediamtx /usr/local/bin/mediamtx
 

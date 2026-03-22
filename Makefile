@@ -1,4 +1,4 @@
-.PHONY: run run-config build tidy test clean proto-gen up down logs mediamtx-image mediamtx-logs test-push test-push-lavfi test-play test-api test-live-streams test-live-urls test-playback-timespans test-playback-streams test-playback test-control-health test-control-mediamtx mediamtx-build mediamtx-update
+.PHONY: run run-config build tidy test clean proto-gen up down logs mediamtx-image mediamtx-logs test-push test-push-lavfi test-play test-api test-live-streams test-live-urls test-playback-timespans test-playback-streams test-playback test-control-health test-control-mediamtx mediamtx-build mediamtx-update mediamtx-assets-check mediamtx-version-sync
 
 # Run the server with defaults
 run:
@@ -8,21 +8,44 @@ run:
 run-config:
 	go run ./cmd/server -config server.yml
 
-# Start local stack (server + MediaMTX + MinIO + Redis)
-up:
-	docker compose up --build -d
+# Start local stack (MediaMTX + MinIO + Redis)
+up-local:
+	docker compose up -d
 
 # Stop local stack
-down:
+down-local:
 	docker compose down
+
+# Start full container stack (server + MediaMTX + MinIO + Redis)
+up-container:
+	docker compose --profile app up --build -d
+
+# Stop full container stack
+down-container:
+	docker compose --profile app down
 
 # Tail server logs
 logs:
 	docker compose logs -f server
 
 # Build the local custom MediaMTX image from third_party/mediamtx
-mediamtx-image:
+mediamtx-image: mediamtx-assets-check
 	docker compose build mediamtx
+
+# Sync the project root VERSION into the MediaMTX embedded version file
+mediamtx-version-sync:
+	@test -f VERSION || (echo "missing: VERSION" && exit 1)
+	@mkdir -p third_party/mediamtx/internal/core
+	@cp VERSION third_party/mediamtx/internal/core/VERSION
+	@echo "Synced VERSION -> third_party/mediamtx/internal/core/VERSION"
+
+# Check vendored/generated MediaMTX assets that must exist before build
+mediamtx-assets-check: mediamtx-version-sync
+	@test -f third_party/mediamtx/internal/core/VERSION || (echo "missing: third_party/mediamtx/internal/core/VERSION" && exit 1)
+	@test -f third_party/mediamtx/internal/servers/hls/hls.min.js || (echo "missing: third_party/mediamtx/internal/servers/hls/hls.min.js" && exit 1)
+	@test -d third_party/mediamtx/internal/staticsources/rpicamera/mtxrpicam_32 || (echo "missing: third_party/mediamtx/internal/staticsources/rpicamera/mtxrpicam_32" && exit 1)
+	@test -d third_party/mediamtx/internal/staticsources/rpicamera/mtxrpicam_64 || (echo "missing: third_party/mediamtx/internal/staticsources/rpicamera/mtxrpicam_64" && exit 1)
+	@echo "MediaMTX vendored assets look ready."
 
 # Tail MediaMTX logs
 mediamtx-logs:
@@ -33,7 +56,7 @@ build:
 	go build -o bin/go-cam-server ./cmd/server
 
 # Build MediaMTX binary from the git submodule (third_party/mediamtx)
-mediamtx-build:
+mediamtx-build: mediamtx-assets-check
 	cd third_party/mediamtx && go build -o ../../mediamtx .
 
 # Pull latest changes from MediaMTX upstream
@@ -50,7 +73,7 @@ test:
 
 # Clean build artifacts and stream output
 clean:
-	rm -rf bin/ hls/ storage/
+	rm -rf bin/ data/hls/ data/storage/ data/logs/
 
 # Generate protobuf (future: gRPC inter-node relay)
 # Requires: go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
@@ -68,7 +91,7 @@ test-push:
 
 # Push a synthetic test stream into MediaMTX (no sample file required)
 test-push-lavfi:
-	ffmpeg -re -f lavfi -i testsrc=size=1280x720:rate=25 -c:v libx264 -pix_fmt yuv420p -preset veryfast -tune zerolatency -f flv rtmp://localhost:1935/cam1
+	ffmpeg -re -f lavfi -i testsrc=size=1280x720:rate=25 -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 -c:v libx264 -pix_fmt yuv420p -preset veryfast -tune zerolatency -c:a aac -f flv rtmp://localhost:1935/cam1
 
 # Watch live via MediaMTX HLS (requires ffplay)
 test-play:

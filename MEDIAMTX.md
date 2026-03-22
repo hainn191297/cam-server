@@ -83,11 +83,36 @@ Useful make targets:
 ```bash
 make mediamtx-image
 make mediamtx-logs
+make mediamtx-assets-check
 make test-control-health
 make test-control-mediamtx
 ```
 
-## 7) No-auth note
+## 7) Vendored build assets
+
+This repo now expects MediaMTX generated assets to be prepared locally in advance.
+The Docker build does not run `go generate ./...`.
+
+`VERSION` is sourced from the project root [VERSION](/Users/steven/Documents/learn/cam/go-cam-server/VERSION) file, then synced into `third_party/mediamtx/internal/core/VERSION` for local builds and embedded into the MediaMTX binary.
+
+Required generated assets:
+
+- `VERSION` at the project root
+  synced by `make mediamtx-version-sync` into `third_party/mediamtx/internal/core/VERSION`
+- `third_party/mediamtx/internal/servers/hls/hls.min.js`
+  source trigger: `internal/servers/hls/http_server.go` via `//go:generate go run ./hlsjsdownloader`
+- `third_party/mediamtx/internal/staticsources/rpicamera/mtxrpicam_32/`
+- `third_party/mediamtx/internal/staticsources/rpicamera/mtxrpicam_64/`
+  source trigger: `internal/staticsources/rpicamera/downloader.go` via `//go:generate go run ./mtxrpicamdownloader`
+
+Quick check before building:
+
+```bash
+make mediamtx-version-sync
+make mediamtx-assets-check
+```
+
+## 8) No-auth note
 
 `mediamtx.yml` is configured without auth users on purpose (temporary mode).
 Do not expose these ports directly to the public Internet until auth and edge protection are added.

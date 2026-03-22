@@ -31,3 +31,6 @@ recordings/
 
 # Custom tools
 mise.toml
+
+# Docker local mount
+data/

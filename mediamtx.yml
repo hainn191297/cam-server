@@ -42,8 +42,19 @@ pathDefaults:
   recordDeleteAfter: 72h
   # Notify Go server when a stream becomes ready / not ready.
   # The Go server pulls RTSP from MediaMTX and feeds its own subscriber pipeline.
-  runOnReady: curl -sf -X POST "http://server:8080/internal/on-publish?path=$MTX_PATH&source_type=$MTX_SOURCE_TYPE&source_id=$MTX_SOURCE_ID&traceparent=$MTX_TRACEPARENT"
-  runOnNotReady: curl -sf -X POST "http://server:8080/internal/on-unpublish?path=$MTX_PATH&source_type=$MTX_SOURCE_TYPE&source_id=$MTX_SOURCE_ID&traceparent=$MTX_TRACEPARENT"
+  runOnReady: curl -sf -X POST "http://host.docker.internal:8080/internal/on-publish?path=$MTX_PATH&source_type=$MTX_SOURCE_TYPE&source_id=$MTX_SOURCE_ID&traceparent=$MTX_TRACEPARENT"
+  runOnNotReady: curl -sf -X POST "http://host.docker.internal:8080/internal/on-unpublish?path=$MTX_PATH&source_type=$MTX_SOURCE_TYPE&source_id=$MTX_SOURCE_ID&traceparent=$MTX_TRACEPARENT"
 
 paths:
+  # Any path without an underscore (e.g., 'cam1', 'frontdoor') is assumed to be the original high-quality stream.
+  # We transcode it and push back to MediaMTX with '_720p' and '_480p' suffixes.
+  "~^([A-Za-z0-9]+)$":
+    runOnReady: >
+      curl -sf -X POST "http://host.docker.internal:8080/internal/on-publish?path=$MTX_PATH&source_type=$MTX_SOURCE_TYPE&source_id=$MTX_SOURCE_ID&traceparent=$MTX_TRACEPARENT" &
+      ffmpeg -i rtsp://localhost:8554/$MTX_PATH 
+      -c:v libx264 -preset ultrafast -b:v 1500k -s 1280x720 -c:a copy -f rtsp rtsp://localhost:8554/${MTX_PATH}_720p 
+      -c:v libx264 -preset ultrafast -b:v 800k -s 854x480 -c:a copy -f rtsp rtsp://localhost:8554/${MTX_PATH}_480p
+    runOnReadyRestart: yes
+
+  # Catch-all for other paths (including the transcoded ones like cam1_720p)
   all:

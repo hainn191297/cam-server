@@ -8,20 +8,20 @@ import (
 )
 
 type Config struct {
-	RTMP          RTMPConfig          `yaml:"rtmp"`
-	HTTP          HTTPConfig          `yaml:"http"`
-	Redis         RedisConfig         `yaml:"redis"`
-	Node          NodeConfig          `yaml:"node"`
-	Topology      TopologyConfig      `yaml:"topology"`
-	HA            HAConfig            `yaml:"ha"`
-	SLO           SLOConfig           `yaml:"slo"`
-	HLS           HLSConfig           `yaml:"hls"`
-	Storage       StorageConfig       `yaml:"storage"`
-	MinIO         MinIOConfig         `yaml:"minio"`
-	MediaMTX      MediaMTXConfig      `yaml:"media_mtx"`
-	MediaMTXProc  MediaMTXProcConfig  `yaml:"media_mtx_proc"`
-	PionWebRTC    PionWebRTCConfig    `yaml:"pion_webrtc"`
-	Logging       LoggingConfig       `yaml:"logging"`
+	RTMP         RTMPConfig         `yaml:"rtmp"`
+	HTTP         HTTPConfig         `yaml:"http"`
+	Redis        RedisConfig        `yaml:"redis"`
+	Node         NodeConfig         `yaml:"node"`
+	Topology     TopologyConfig     `yaml:"topology"`
+	HA           HAConfig           `yaml:"ha"`
+	SLO          SLOConfig          `yaml:"slo"`
+	HLS          HLSConfig          `yaml:"hls"`
+	Storage      StorageConfig      `yaml:"storage"`
+	MinIO        MinIOConfig        `yaml:"minio"`
+	MediaMTX     MediaMTXConfig     `yaml:"media_mtx"`
+	MediaMTXProc MediaMTXProcConfig `yaml:"media_mtx_proc"`
+	PionWebRTC   PionWebRTCConfig   `yaml:"pion_webrtc"`
+	Logging      LoggingConfig      `yaml:"logging"`
 }
 
 type RTMPConfig struct {
@@ -179,12 +179,12 @@ func defaults() *Config {
 			ReconnectSuccessTarget:   99.9,
 		},
 		HLS: HLSConfig{
-			RootPath:        "./hls",
+			RootPath:        "./data/hls",
 			SegmentDuration: 2,
 			MaxSegments:     5,
 		},
 		Storage: StorageConfig{
-			RootPath: "./storage",
+			RootPath: "./data/storage",
 		},
 		MinIO: MinIOConfig{
 			Endpoint:        "localhost:9000",
@@ -221,7 +221,7 @@ func defaults() *Config {
 		},
 		Logging: LoggingConfig{
 			Level:           "info",
-			Dir:             "./logs",
+			Dir:             "./data/logs",
 			InfoFile:        "info.log",
 			ErrorFile:       "error.log",
 			StatFile:        "stat.log",
