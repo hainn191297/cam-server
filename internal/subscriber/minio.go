@@ -72,6 +72,7 @@ func (s *MinIOSubscriber) Deliver(pkt *stream.AVPacket) {
 	case s.ch <- pkt:
 	default:
 		s.dropped.Add(1)
+		pkt.Release()
 	}
 }
 
@@ -86,6 +87,17 @@ func (s *MinIOSubscriber) Close() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 func (s *MinIOSubscriber) run() {
+	defer func() {
+		for {
+			select {
+			case pkt := <-s.ch:
+				pkt.Release()
+			default:
+				return
+			}
+		}
+	}()
+
 	ticker := time.NewTicker(time.Duration(s.segmentSecs) * time.Second)
 	defer ticker.Stop()
 
@@ -97,7 +109,9 @@ func (s *MinIOSubscriber) run() {
 			if !ok {
 				return
 			}
-			if err := vmsflv.WriteTag(buf, pkt); err != nil {
+			err := vmsflv.WriteTag(buf, pkt)
+			pkt.Release()
+			if err != nil {
 				logrus.WithFields(s.fields()).WithError(err).Warnf("minio-sub[%s]: write tag", s.streamKey)
 			}
 

@@ -66,9 +66,11 @@ func (s *liveStream) pump() {
 			s.packetsTotal.Add(1)
 			s.mu.RLock()
 			for _, sub := range s.subs {
+				pkt.Retain()
 				sub.Deliver(pkt)
 			}
 			s.mu.RUnlock()
+			pkt.Release()
 		case <-s.done:
 			return
 		}

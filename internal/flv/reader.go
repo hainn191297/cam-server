@@ -46,27 +46,26 @@ func (rd *Reader) Next() (*stream.AVPacket, error) {
 
 	// StreamID (bytes 8-10) — always 0, ignored.
 
-	// Read tag payload.
-	data := make([]byte, dataLen)
-	if _, err := io.ReadFull(rd.r, data); err != nil {
+	// Read tag payload into pooled packet.
+	pkt := stream.NewAVPacket(dataLen)
+	if _, err := io.ReadFull(rd.r, pkt.Data); err != nil {
+		pkt.Release()
 		return nil, fmt.Errorf("flv: read tag data: %w", err)
 	}
 
 	// Read and discard PreviousTagSize (4 bytes).
 	var prevSize [4]byte
 	if _, err := io.ReadFull(rd.r, prevSize[:]); err != nil {
+		pkt.Release()
 		return nil, fmt.Errorf("flv: read prevTagSize: %w", err)
 	}
 
-	pkt := &stream.AVPacket{
-		Type:      tagType,
-		Timestamp: ts,
-		Data:      data,
-	}
+	pkt.Type = tagType
+	pkt.Timestamp = ts
 
 	// Detect keyframe: video tag, first nibble of first byte == 1.
-	if tagType == stream.PacketVideo && len(data) > 0 {
-		pkt.IsKeyframe = (data[0] >> 4) == 1
+	if tagType == stream.PacketVideo && len(pkt.Data) > 0 {
+		pkt.IsKeyframe = (pkt.Data[0] >> 4) == 1
 	}
 
 	return pkt, nil

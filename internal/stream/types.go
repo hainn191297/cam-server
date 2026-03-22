@@ -11,10 +11,35 @@
 package stream
 
 import (
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"go-cam-server/internal/tracectx"
 )
+
+var packetPool = sync.Pool{
+	New: func() any {
+		return &AVPacket{}
+	},
+}
+
+// NewAVPacket acquires an AVPacket from the pool with at least the requested data capacity.
+// It returns the packet with a reference count of 1.
+func NewAVPacket(size int) *AVPacket {
+	pkt := packetPool.Get().(*AVPacket)
+	pkt.refs.Store(1)
+	if cap(pkt.Data) < size {
+		pkt.Data = make([]byte, size)
+	} else {
+		pkt.Data = pkt.Data[:size]
+	}
+	// Reset fields for the new user
+	pkt.Type = 0
+	pkt.Timestamp = 0
+	pkt.IsKeyframe = false
+	return pkt
+}
 
 // PacketType classifies the media content of an AVPacket.
 // Values mirror FLV tag type bytes for binary compatibility.
@@ -42,6 +67,20 @@ type AVPacket struct {
 	Timestamp  uint32 // milliseconds, relative to stream start
 	IsKeyframe bool   // true for video IDR/keyframe packets
 	Data       []byte // raw FLV tag body (codec payload bytes)
+
+	refs atomic.Int32
+}
+
+// Retain increments the reference count.
+func (p *AVPacket) Retain() {
+	p.refs.Add(1)
+}
+
+// Release decrements the reference count and returns the packet to the pool if it reaches 0.
+func (p *AVPacket) Release() {
+	if p.refs.Add(-1) == 0 {
+		packetPool.Put(p)
+	}
 }
 
 // SubscriberType classifies what a subscriber does with the data.

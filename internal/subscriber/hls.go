@@ -65,6 +65,7 @@ func (s *HLSSubscriber) Deliver(pkt *stream.AVPacket) {
 	case s.ch <- pkt:
 	default:
 		s.dropped.Add(1)
+		pkt.Release()
 	}
 }
 
@@ -84,6 +85,17 @@ type segment struct {
 }
 
 func (s *HLSSubscriber) run() {
+	defer func() {
+		for {
+			select {
+			case pkt := <-s.ch:
+				pkt.Release()
+			default:
+				return
+			}
+		}
+	}()
+
 	dir := filepath.Join(s.hlsRoot, s.streamKey)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		logrus.WithFields(s.fields()).WithError(err).Errorf("hls[%s]: mkdir failed", s.streamKey)
@@ -144,9 +156,13 @@ func (s *HLSSubscriber) run() {
 				return
 			}
 			if segFile != nil {
-				if err := vmsflv.WriteTag(segFile, pkt); err != nil {
+				err := vmsflv.WriteTag(segFile, pkt)
+				pkt.Release()
+				if err != nil {
 					logrus.WithFields(s.fields()).WithError(err).Warnf("hls[%s]: write tag error", s.streamKey)
 				}
+			} else {
+				pkt.Release()
 			}
 
 		case <-ticker.C:

@@ -64,6 +64,7 @@ func (s *LivestreamSubscriber) Deliver(pkt *stream.AVPacket) {
 	case s.ch <- pkt:
 	default:
 		s.dropped.Add(1)
+		pkt.Release()
 	}
 }
 
@@ -95,13 +96,34 @@ func (s *LivestreamSubscriber) SendGOP() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 func (s *LivestreamSubscriber) run() {
+	defer func() {
+		// Drain channel to release remaining packets
+		for {
+			select {
+			case pkt := <-s.ch:
+				pkt.Release()
+			default:
+				// Release GOP cache on exit
+				s.gopMu.Lock()
+				for _, p := range s.gopCache {
+					p.Release()
+				}
+				s.gopCache = nil
+				s.gopMu.Unlock()
+				return
+			}
+		}
+	}()
+
 	for {
 		select {
 		case pkt, ok := <-s.ch:
 			if !ok {
 				return
 			}
-			if err := s.onPkt(pkt); err != nil {
+			err := s.onPkt(pkt)
+			pkt.Release()
+			if err != nil {
 				logrus.Infof("live[%s]: viewer disconnected: %v", s.id, err)
 				return
 			}
@@ -119,15 +141,24 @@ func (s *LivestreamSubscriber) updateGOP(pkt *stream.AVPacket) {
 
 	if pkt.Type == stream.PacketVideo {
 		if pkt.IsKeyframe {
+			for _, p := range s.gopCache {
+				p.Release()
+			}
 			s.gopCache = s.gopCache[:0]
 		}
+		pkt.Retain()
 		s.gopCache = append(s.gopCache, pkt)
 	} else {
 		// Audio and metadata belong to the current GOP
+		pkt.Retain()
 		s.gopCache = append(s.gopCache, pkt)
 	}
 
-	if len(s.gopCache) > gopCacheMax {
-		s.gopCache = s.gopCache[len(s.gopCache)-gopCacheMax:]
+	cut := len(s.gopCache) - gopCacheMax
+	if cut > 0 {
+		for i := 0; i < cut; i++ {
+			s.gopCache[i].Release()
+		}
+		s.gopCache = s.gopCache[cut:]
 	}
 }

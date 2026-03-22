@@ -217,13 +217,8 @@ func (m *IngestManager) ingest(ctx context.Context, streamKey string) {
 	if h264fmt != nil {
 		sps, pps := h264fmt.SafeParams()
 		if len(sps) >= 4 && len(pps) > 0 {
-			body := buildVideoSeqHeader(sps, pps)
-			liveStream.Ingest(&stream.AVPacket{
-				Type:       stream.PacketVideo,
-				Timestamp:  0,
-				IsKeyframe: true,
-				Data:       body,
-			})
+			pkt := buildVideoSeqHeader(sps, pps)
+			liveStream.Ingest(pkt)
 		}
 	}
 
@@ -231,11 +226,8 @@ func (m *IngestManager) ingest(ctx context.Context, streamKey string) {
 	if aacFmt != nil && aacFmt.Config != nil {
 		configBytes, err := aacFmt.Config.Marshal()
 		if err == nil && len(configBytes) > 0 {
-			liveStream.Ingest(&stream.AVPacket{
-				Type:      stream.PacketAudio,
-				Timestamp: 0,
-				Data:      buildAudioSeqHeader(configBytes),
-			})
+			pkt := buildAudioSeqHeader(configBytes)
+			liveStream.Ingest(pkt)
 		}
 	}
 
@@ -276,18 +268,13 @@ func (m *IngestManager) ingest(ctx context.Context, streamKey string) {
 					currentPPS = newPPS
 				}
 				if len(currentSPS) >= 4 && len(currentPPS) > 0 {
-					body := buildVideoSeqHeader(currentSPS, currentPPS)
-					liveStream.Ingest(&stream.AVPacket{
-						Type:       stream.PacketVideo,
-						Timestamp:  0,
-						IsKeyframe: true,
-						Data:       body,
-					})
+					pkt := buildVideoSeqHeader(currentSPS, currentPPS)
+					liveStream.Ingest(pkt)
 				}
 			}
 
-			body, isKeyframe := buildVideoFrame(nalus)
-			if body == nil {
+			outPkt := buildVideoFrame(nalus)
+			if outPkt == nil {
 				return
 			}
 
@@ -298,12 +285,8 @@ func (m *IngestManager) ingest(ctx context.Context, streamKey string) {
 			// H264 clock rate = 90 000 Hz → divide by 90 to get milliseconds.
 			ts := (pkt.Timestamp - firstTS) / 90
 
-			liveStream.Ingest(&stream.AVPacket{
-				Type:       stream.PacketVideo,
-				Timestamp:  ts,
-				IsKeyframe: isKeyframe,
-				Data:       body,
-			})
+			outPkt.Timestamp = ts
+			liveStream.Ingest(outPkt)
 		})
 	}
 
@@ -343,11 +326,9 @@ func (m *IngestManager) ingest(ctx context.Context, streamKey string) {
 			ts := uint32(uint64(pkt.Timestamp-firstTS) * 1000 / uint64(sampleRate))
 
 			for _, au := range aus {
-				liveStream.Ingest(&stream.AVPacket{
-					Type:      stream.PacketAudio,
-					Timestamp: ts,
-					Data:      buildAudioFrame(au),
-				})
+				outPkt := buildAudioFrame(au)
+				outPkt.Timestamp = ts
+				liveStream.Ingest(outPkt)
 			}
 		})
 	}
@@ -390,14 +371,17 @@ func traceContextValue(ctx context.Context) tracectx.Context {
 // AVCDecoderConfigurationRecord (SPS + PPS).
 //
 // Layout: 0x17 0x00 0x00 0x00 0x00 + AVCDecoderConfigurationRecord
-func buildVideoSeqHeader(sps, pps []byte) []byte {
+func buildVideoSeqHeader(sps, pps []byte) *stream.AVPacket {
 	record := buildAVCConfigRecord(sps, pps)
-	body := make([]byte, 5+len(record))
-	body[0] = 0x17 // keyframe | AVC codec (1<<4 | 7)
-	body[1] = 0x00 // AVC sequence header
-	// body[2:5] = composition time = 0 (already zero)
-	copy(body[5:], record)
-	return body
+	pkt := stream.NewAVPacket(5 + len(record))
+	pkt.Type = stream.PacketVideo
+	pkt.Timestamp = 0
+	pkt.IsKeyframe = true
+	pkt.Data[0] = 0x17 // keyframe | AVC codec (1<<4 | 7)
+	pkt.Data[1] = 0x00 // AVC sequence header
+	// pkt.Data[2:5] = composition time = 0 (already zero)
+	copy(pkt.Data[5:], record)
+	return pkt
 }
 
 // buildAVCConfigRecord builds an AVCDecoderConfigurationRecord from raw SPS/PPS.
@@ -422,8 +406,9 @@ func buildAVCConfigRecord(sps, pps []byte) []byte {
 //
 // SPS (type 7) and PPS (type 8) NALUs are filtered out — they live in the
 // sequence header packet. AUD (type 9) is also filtered.
-func buildVideoFrame(nalus [][]byte) (body []byte, isKeyframe bool) {
+func buildVideoFrame(nalus [][]byte) *stream.AVPacket {
 	var filtered [][]byte
+	var isKeyframe bool
 	for _, nalu := range nalus {
 		if len(nalu) == 0 {
 			continue
@@ -438,7 +423,7 @@ func buildVideoFrame(nalus [][]byte) (body []byte, isKeyframe bool) {
 		}
 	}
 	if len(filtered) == 0 {
-		return nil, isKeyframe
+		return nil
 	}
 
 	// Compute total body size: 5 header bytes + (4+naluLen) per NALU.
@@ -447,23 +432,26 @@ func buildVideoFrame(nalus [][]byte) (body []byte, isKeyframe bool) {
 		total += 4 + len(nalu)
 	}
 
-	body = make([]byte, total)
+	pkt := stream.NewAVPacket(total)
+	pkt.Type = stream.PacketVideo
+	pkt.IsKeyframe = isKeyframe
+
 	if isKeyframe {
-		body[0] = 0x17 // keyframe | AVC
+		pkt.Data[0] = 0x17 // keyframe | AVC
 	} else {
-		body[0] = 0x27 // inter | AVC
+		pkt.Data[0] = 0x27 // inter | AVC
 	}
-	body[1] = 0x01 // AVC NALU
-	// body[2:5] = composition time = 0 (already zero)
+	pkt.Data[1] = 0x01 // AVC NALU
+	// pkt.Data[2:5] = composition time = 0 (already zero)
 
 	pos := 5
 	for _, nalu := range filtered {
-		binary.BigEndian.PutUint32(body[pos:], uint32(len(nalu)))
+		binary.BigEndian.PutUint32(pkt.Data[pos:], uint32(len(nalu)))
 		pos += 4
-		copy(body[pos:], nalu)
+		copy(pkt.Data[pos:], nalu)
 		pos += len(nalu)
 	}
-	return body, isKeyframe
+	return pkt
 }
 
 // buildAudioSeqHeader builds an FLV audio tag body for AudioSpecificConfig.
@@ -471,23 +459,26 @@ func buildVideoFrame(nalus [][]byte) (body []byte, isKeyframe bool) {
 // Layout: 0xAF 0x00 + AudioSpecificConfig bytes
 //
 // 0xAF = SoundFormat(AAC=10) | SoundRate(44kHz=3) | SoundSize(16bit=1) | SoundType(stereo=1)
-func buildAudioSeqHeader(configBytes []byte) []byte {
-	body := make([]byte, 2+len(configBytes))
-	body[0] = 0xAF // (10<<4) | (3<<2) | (1<<1) | 1
-	body[1] = 0x00 // AAC sequence header
-	copy(body[2:], configBytes)
-	return body
+func buildAudioSeqHeader(configBytes []byte) *stream.AVPacket {
+	pkt := stream.NewAVPacket(2 + len(configBytes))
+	pkt.Type = stream.PacketAudio
+	pkt.Timestamp = 0
+	pkt.Data[0] = 0xAF // (10<<4) | (3<<2) | (1<<1) | 1
+	pkt.Data[1] = 0x00 // AAC sequence header
+	copy(pkt.Data[2:], configBytes)
+	return pkt
 }
 
 // buildAudioFrame builds an FLV audio tag body for a raw AAC-ES frame.
 //
 // Layout: 0xAF 0x01 + raw AAC-ES bytes
-func buildAudioFrame(data []byte) []byte {
-	body := make([]byte, 2+len(data))
-	body[0] = 0xAF // same codec/rate/size/channels byte as sequence header
-	body[1] = 0x01 // AAC raw
-	copy(body[2:], data)
-	return body
+func buildAudioFrame(data []byte) *stream.AVPacket {
+	pkt := stream.NewAVPacket(2 + len(data))
+	pkt.Type = stream.PacketAudio
+	pkt.Data[0] = 0xAF // same codec/rate/size/channels byte as sequence header
+	pkt.Data[1] = 0x01 // AAC raw
+	copy(pkt.Data[2:], data)
+	return pkt
 }
 
 // extractSPSPPS scans an access unit for in-band SPS and PPS NALUs.

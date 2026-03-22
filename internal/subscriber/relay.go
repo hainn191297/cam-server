@@ -64,6 +64,7 @@ func (s *RelaySubscriber) Deliver(pkt *stream.AVPacket) {
 	case s.ch <- pkt:
 	default:
 		s.dropped.Add(1)
+		pkt.Release()
 	}
 }
 
@@ -76,13 +77,26 @@ func (s *RelaySubscriber) Close() {
 }
 
 func (s *RelaySubscriber) run() {
+	defer func() {
+		for {
+			select {
+			case pkt := <-s.ch:
+				pkt.Release()
+			default:
+				return
+			}
+		}
+	}()
+
 	for {
 		select {
 		case pkt, ok := <-s.ch:
 			if !ok {
 				return
 			}
-			if err := vmsflv.WriteTag(s.w, pkt); err != nil {
+			err := vmsflv.WriteTag(s.w, pkt)
+			pkt.Release()
+			if err != nil {
 				// Network write failed — Node B disconnected
 				logrus.WithFields(s.fields()).WithError(err).Info("relay_sub.write_failed")
 				return
