@@ -39,6 +39,15 @@ type CameraStream struct {
 
 	// Source records which adapter produced this entry.
 	Source string `json:"source"` // e.g. "onvif", "manual", "csv"
+
+	// Capabilities defines which features the camera supports (e.g. PTZ, Snapshot).
+	Capabilities DeviceCapabilities `json:"capabilities"`
+}
+
+// DeviceCapabilities flags which features are supported by the camera.
+type DeviceCapabilities struct {
+	CanPTZ      bool `json:"can_ptz"`
+	CanSnapshot bool `json:"can_snapshot"`
 }
 
 // MainStream returns the primary RTSP URL, or empty string if not set.

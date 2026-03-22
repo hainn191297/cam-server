@@ -38,9 +38,10 @@ func (a *ManualAdapter) Resolve(_ context.Context, params ResolveParams) (*Camer
 	}
 
 	return &CameraStream{
-		CameraID: cameraID,
-		Name:     cameraID,
-		Source:   a.Name(),
-		Streams:  streams,
+		CameraID:     cameraID,
+		Name:         cameraID,
+		Source:       a.Name(),
+		Streams:      streams,
+		Capabilities: DeviceCapabilities{}, // Manual RTSP doesn't support ONVIF features by default
 	}, nil
 }

@@ -30,10 +30,12 @@ type DiscoveredDevice struct {
 	Endpoint string `json:"endpoint"` // e.g. http://192.168.1.50:80/onvif/device_service
 }
 
-// StreamInfo holds the RTSP URIs extracted from an ONVIF device.
+// StreamInfo holds the RTSP URIs and supported features extracted from an ONVIF device.
 type StreamInfo struct {
-	MainStream string `json:"main_stream"` // Highest resolution RTSP URL
-	SubStream  string `json:"sub_stream"`  // Lower resolution RTSP URL (may be empty)
+	MainStream  string `json:"main_stream"`  // Highest resolution RTSP URL
+	SubStream   string `json:"sub_stream"`   // Lower resolution RTSP URL (may be empty)
+	CanPTZ      bool   `json:"can_ptz"`      // True if the main profile supports PTZ
+	CanSnapshot bool   `json:"can_snapshot"` // True if the device supports snapshots
 }
 
 // Discover scans the given network interface for ONVIF devices.
@@ -131,8 +133,16 @@ func GetStreams(xaddr, username, password string) (*StreamInfo, error) {
 	}
 
 	mainIdx, subIdx := classifyProfiles(profiles)
+	mainProfile := profiles[mainIdx]
 
-	info := &StreamInfo{}
+	info := &StreamInfo{
+		CanPTZ: mainProfile.PTZConfiguration != nil,
+	}
+
+	// Check for snapshot capability (most cameras that support Media support it)
+	_, snapErr := dev.CallMethod(media.GetSnapshotUri{ProfileToken: usexonvif.ReferenceToken(mainProfile.Token)})
+	info.CanSnapshot = (snapErr == nil)
+
 	for i, p := range profiles {
 		if i != mainIdx && i != subIdx {
 			continue
@@ -414,6 +424,9 @@ type cProfile struct {
 			Height int `xml:"Height"`
 		} `xml:"Resolution"`
 	} `xml:"VideoEncoderConfiguration"`
+	PTZConfiguration *struct {
+		Token string `xml:"token,attr"`
+	} `xml:"PTZConfiguration"`
 }
 
 // classifyProfiles returns the indices of the best main (highest res) and

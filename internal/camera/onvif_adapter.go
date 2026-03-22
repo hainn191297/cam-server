@@ -51,6 +51,10 @@ func (a *ONVIFAdapter) Resolve(ctx context.Context, params ResolveParams) (*Came
 		Name:     cameraID,
 		Source:   a.Name(),
 		Streams:  streams,
+		Capabilities: DeviceCapabilities{
+			CanPTZ:      info.CanPTZ,
+			CanSnapshot: info.CanSnapshot,
+		},
 	}, nil
 }
 
