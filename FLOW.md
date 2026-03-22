@@ -312,10 +312,14 @@ Current (POC):     HTTP FLV streaming   — simple, no codegen, works now
 Phase 2:           gRPC bidirectional   — lower latency, backpressure
 
 proto/media.proto:
-  service StreamService {
-    rpc RelayStream(RelayRequest) returns (stream RelayPacket);
-    rpc KeepAlive(KeepAliveRequest) returns (KeepAliveResponse);
-    rpc GetNodes(GetNodesRequest) returns (GetNodesResponse);
+  service AppService {
+    rpc ListLiveStreams(ListStreamsRequest) returns (ListStreamsResponse);
+    rpc GetMonitorPriority(MonitorPriorityRequest) returns (MonitorPriorityResponse);
+    rpc CreateLiveSession(CreateSessionRequest) returns (CreateSessionResponse);
+  }
+  service RelayService {
+    rpc PullStream(PullStreamRequest) returns (stream FLVPacket);
+    rpc SyncNodeState(NodeStateRequest) returns (NodeStateResponse);
   }
 
 Replace in node/relay.go:

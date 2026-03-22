@@ -10,7 +10,6 @@ RUN go mod download
 
 COPY third_party/mediamtx/ ./
 
-RUN go generate ./...
 RUN CGO_ENABLED=0 go build -tags enable_upgrade -o /out/mediamtx .
 
 FROM alpine:3.22

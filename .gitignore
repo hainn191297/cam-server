@@ -17,6 +17,7 @@ coverage.out
 
 # Runtime logs, temp files and media storage
 logs/
+.logs/
 *.log
 tmp/
 hls/
