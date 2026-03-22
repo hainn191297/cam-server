@@ -1,3 +1,0 @@
-[submodule "third_party/mediamtx"]
-	path = third_party/mediamtx
-	url = https://github.com/bluenviron/mediamtx.git
