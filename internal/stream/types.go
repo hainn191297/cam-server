@@ -12,6 +12,8 @@ package stream
 
 import (
 	"time"
+
+	"go-cam-server/internal/tracectx"
 )
 
 // PacketType classifies the media content of an AVPacket.
@@ -85,6 +87,12 @@ type Publisher interface {
 	StartedAt() time.Time
 	Stats() PublisherStats
 	Stop()
+}
+
+// TraceCarrier is an optional interface for publishers that can provide
+// correlation metadata for the lifetime of a stream session.
+type TraceCarrier interface {
+	TraceContext() tracectx.Context
 }
 
 // Subscriber receives AVPackets from a Stream's fan-out.

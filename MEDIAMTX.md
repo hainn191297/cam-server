@@ -11,6 +11,8 @@ cd go-cam-server
 make up
 ```
 
+`docker compose` now builds `mediamtx` from the local `third_party/mediamtx` subproject instead of pulling the upstream image directly. That keeps `go-cam-server` as the control plane while letting you patch and rebuild MediaMTX like a normal service.
+
 Services exposed:
 - `1935` RTMP ingest
 - `8554` RTSP live
@@ -62,7 +64,30 @@ curl -s "http://localhost:9996/list?path=cam1" | jq
 - `DELETE /pion/webrtc/session/{id}`
 - `GET /playback/{key}/timespans`
 
-## 6) No-auth note
+## 6) Control-plane monitoring
+
+- Lightweight dependency health:
+
+```bash
+curl -s "http://localhost:8080/control/health" | jq
+```
+
+- Detailed MediaMTX snapshot via `go-cam-server`:
+
+```bash
+curl -s "http://localhost:8080/control/media-mtx" | jq
+```
+
+Useful make targets:
+
+```bash
+make mediamtx-image
+make mediamtx-logs
+make test-control-health
+make test-control-mediamtx
+```
+
+## 7) No-auth note
 
 `mediamtx.yml` is configured without auth users on purpose (temporary mode).
 Do not expose these ports directly to the public Internet until auth and edge protection are added.

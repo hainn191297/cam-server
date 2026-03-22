@@ -7,6 +7,8 @@ services:
       - "6379:6379"
     volumes:
       - redis-data:/data
+    networks:
+      - cam-net
     restart: unless-stopped
 
   minio:
@@ -21,10 +23,14 @@ services:
       - "9001:9001"
     volumes:
       - minio-data:/data
+    networks:
+      - cam-net
     restart: unless-stopped
 
   mediamtx:
-    image: bluenviron/mediamtx:1.16.1
+    build:
+      context: .
+      dockerfile: Dockerfile.mediamtx
     container_name: go-cam-mediamtx
     ports:
       - "1935:1935" # RTMP ingest
@@ -36,6 +42,14 @@ services:
     volumes:
       - ./mediamtx.yml:/mediamtx.yml:ro
       - recordings-data:/recordings
+    networks:
+      - cam-net
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:9997/v3/config/global/get"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
     restart: unless-stopped
 
   server:
@@ -44,16 +58,26 @@ services:
       dockerfile: Dockerfile
     container_name: go-cam-server
     depends_on:
-      - redis
-      - minio
-      - mediamtx
+      redis:
+        condition: service_started
+      minio:
+        condition: service_started
+      mediamtx:
+        condition: service_healthy
     ports:
       - "8080:8080"
     volumes:
       - hls-data:/app/hls
       - storage-data:/app/storage
       - logs-data:/app/logs
+    networks:
+      - cam-net
     restart: unless-stopped
+
+networks:
+  cam-net:
+    name: go-cam-network
+    driver: bridge
 
 volumes:
   redis-data:

@@ -8,6 +8,7 @@ import (
 
 	vmsflv "go-cam-server/internal/flv"
 	"go-cam-server/internal/subscriber"
+	"go-cam-server/internal/tracectx"
 )
 
 // GET /relay/{key}
@@ -35,9 +36,13 @@ import (
 //	                                      liveStream pump goroutine
 func (s *Server) serveRelay(w http.ResponseWriter, r *http.Request) {
 	key := chi.URLParam(r, "key")
+	fields := tracectx.Fields(r.Context())
+	fields["stream_key"] = key
+	fields["remote_addr"] = r.RemoteAddr
 
 	st, ok := s.manager.Get(key)
 	if !ok {
+		logrus.WithFields(fields).Warn("relay.serve.stream_not_found")
 		http.Error(w, "stream not found", http.StatusNotFound)
 		return
 	}
@@ -49,7 +54,7 @@ func (s *Server) serveRelay(w http.ResponseWriter, r *http.Request) {
 
 	// Write the FLV file header so Node B's reader can initialise.
 	if err := vmsflv.WriteFileHeader(w); err != nil {
-		logrus.Errorf("relay-serve[%s]: write FLV header: %v", key, err)
+		logrus.WithFields(fields).WithError(err).Error("relay.serve.write_header_failed")
 		return
 	}
 
@@ -59,16 +64,17 @@ func (s *Server) serveRelay(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create a RelaySubscriber and attach it to the local stream.
-	relaySub := subscriber.NewRelaySubscriber(key, w)
+	tc, _ := tracectx.FromContext(r.Context())
+	relaySub := subscriber.NewRelaySubscriber(key, w, tc)
 	if err := st.AddSubscriber(relaySub); err != nil {
-		logrus.Errorf("relay-serve[%s]: add subscriber: %v", key, err)
+		logrus.WithFields(fields).WithError(err).Error("relay.serve.add_subscriber_failed")
 		return
 	}
 	defer st.RemoveSubscriber(relaySub.ID())
 
-	logrus.Infof("relay-serve[%s]: node %s connected", key, r.RemoteAddr)
+	logrus.WithFields(fields).Info("relay.serve.connected")
 
 	// Block until the requesting node (Node B) disconnects or stream ends.
 	<-r.Context().Done()
-	logrus.Infof("relay-serve[%s]: node %s disconnected", key, r.RemoteAddr)
+	logrus.WithFields(fields).Info("relay.serve.disconnected")
 }

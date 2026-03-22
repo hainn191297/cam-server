@@ -1,0 +1,24 @@
+FROM golang:1.26-alpine3.22 AS builder
+
+WORKDIR /src
+
+RUN apk add --no-cache ca-certificates
+
+COPY third_party/mediamtx/go.mod third_party/mediamtx/go.sum ./third_party/mediamtx/
+WORKDIR /src/third_party/mediamtx
+RUN go mod download
+
+COPY third_party/mediamtx/ ./
+
+RUN go generate ./...
+RUN CGO_ENABLED=0 go build -tags enable_upgrade -o /out/mediamtx .
+
+FROM alpine:3.22
+
+RUN apk add --no-cache ca-certificates tzdata wget
+
+COPY --from=builder /out/mediamtx /usr/local/bin/mediamtx
+
+EXPOSE 1935 8554 8888 8889 9996 9997
+
+ENTRYPOINT ["/usr/local/bin/mediamtx", "/mediamtx.yml"]

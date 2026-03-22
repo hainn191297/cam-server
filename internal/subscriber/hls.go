@@ -12,6 +12,7 @@ import (
 
 	vmsflv "go-cam-server/internal/flv"
 	"go-cam-server/internal/stream"
+	"go-cam-server/internal/tracectx"
 )
 
 const hlsBufSize = 256
@@ -33,19 +34,21 @@ type HLSSubscriber struct {
 	hlsRoot         string
 	segmentDuration int // seconds per segment
 	maxSegments     int // rolling window
+	trace           tracectx.Context
 
 	ch      chan *stream.AVPacket
 	dropped atomic.Uint64
 	done    chan struct{}
 }
 
-func NewHLSSubscriber(streamKey, hlsRoot string, segmentDuration, maxSegments int) *HLSSubscriber {
+func NewHLSSubscriber(streamKey, hlsRoot string, segmentDuration, maxSegments int, tc tracectx.Context) *HLSSubscriber {
 	s := &HLSSubscriber{
 		id:              fmt.Sprintf("hls-%s", streamKey),
 		streamKey:       streamKey,
 		hlsRoot:         hlsRoot,
 		segmentDuration: segmentDuration,
 		maxSegments:     maxSegments,
+		trace:           tc,
 		ch:              make(chan *stream.AVPacket, hlsBufSize),
 		done:            make(chan struct{}),
 	}
@@ -83,7 +86,7 @@ type segment struct {
 func (s *HLSSubscriber) run() {
 	dir := filepath.Join(s.hlsRoot, s.streamKey)
 	if err := os.MkdirAll(dir, 0755); err != nil {
-		logrus.Errorf("hls[%s]: mkdir failed: %v", s.streamKey, err)
+		logrus.WithFields(s.fields()).WithError(err).Errorf("hls[%s]: mkdir failed", s.streamKey)
 		return
 	}
 
@@ -110,7 +113,9 @@ func (s *HLSSubscriber) run() {
 		}
 		segFile = f
 		segStart = time.Now()
-		logrus.Infof("hls[%s]: opened segment %s", s.streamKey, name)
+		fields := s.fields()
+		fields["segment"] = name
+		logrus.WithFields(fields).Info("hls.segment_opened")
 		return nil
 	}
 
@@ -125,7 +130,7 @@ func (s *HLSSubscriber) run() {
 	}
 
 	if err := openSegment(); err != nil {
-		logrus.Errorf("hls[%s]: open first segment: %v", s.streamKey, err)
+		logrus.WithFields(s.fields()).WithError(err).Errorf("hls[%s]: open first segment", s.streamKey)
 		return
 	}
 
@@ -140,7 +145,7 @@ func (s *HLSSubscriber) run() {
 			}
 			if segFile != nil {
 				if err := vmsflv.WriteTag(segFile, pkt); err != nil {
-					logrus.Warnf("hls[%s]: write tag error: %v", s.streamKey, err)
+					logrus.WithFields(s.fields()).WithError(err).Warnf("hls[%s]: write tag error", s.streamKey)
 				}
 			}
 
@@ -154,7 +159,9 @@ func (s *HLSSubscriber) run() {
 			}
 			segIdx++
 			if err := openSegment(); err != nil {
-				logrus.Errorf("hls[%s]: open segment %d: %v", s.streamKey, segIdx, err)
+				fields := s.fields()
+				fields["segment_index"] = segIdx
+				logrus.WithFields(fields).WithError(err).Errorf("hls[%s]: open segment", s.streamKey)
 				return
 			}
 			s.writePlaylist(dir, segs)
@@ -163,7 +170,9 @@ func (s *HLSSubscriber) run() {
 			seg := closeSegment()
 			segs = append(segs, seg)
 			s.writePlaylist(dir, segs)
-			logrus.Infof("hls[%s]: closed, segments=%d", s.streamKey, len(segs))
+			fields := s.fields()
+			fields["segments"] = len(segs)
+			logrus.WithFields(fields).Info("hls.closed")
 			return
 		}
 	}
@@ -174,7 +183,7 @@ func (s *HLSSubscriber) writePlaylist(dir string, segs []segment) {
 	path := filepath.Join(dir, "index.m3u8")
 	f, err := os.Create(path)
 	if err != nil {
-		logrus.Warnf("hls[%s]: write playlist: %v", s.streamKey, err)
+		logrus.WithFields(s.fields()).WithError(err).Warnf("hls[%s]: write playlist", s.streamKey)
 		return
 	}
 	defer f.Close()
@@ -212,6 +221,14 @@ func (s *HLSSubscriber) writePlaylist(dir string, segs []segment) {
 	}
 
 	if err := tmpl.Execute(f, data); err != nil {
-		logrus.Warnf("hls[%s]: template execute: %v", s.streamKey, err)
+		logrus.WithFields(s.fields()).WithError(err).Warnf("hls[%s]: template execute", s.streamKey)
 	}
+}
+
+func (s *HLSSubscriber) fields() logrus.Fields {
+	fields := tracectx.FieldsFromTrace(s.trace)
+	fields["stream_key"] = s.streamKey
+	fields["subscriber_id"] = s.id
+	fields["subscriber_type"] = stream.TypeHLS.String()
+	return fields
 }

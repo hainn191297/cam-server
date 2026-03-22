@@ -1,0 +1,32 @@
+# macOS
+.DS_Store
+
+# IDEs
+.idea/
+.vscode/
+
+# Go build/test artifacts
+bin/
+dist/
+vendor/
+*.test
+*.out
+*.prof
+*.pprof
+coverage.out
+
+# Runtime logs, temp files and media storage
+logs/
+*.log
+tmp/
+hls/
+storage/
+recordings/
+
+# Local env/config
+.env
+.env.*
+!.env.example
+
+# Custom tools
+mise.toml

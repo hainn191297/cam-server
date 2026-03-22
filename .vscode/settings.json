@@ -1,6 +1,16 @@
 {
+  "go.goroot": "/Users/steven/.local/share/mise/installs/go/1.25.0",
   "go.useLanguageServer": true,
   "go.toolsManagement.autoUpdate": true,
+  "go.alternateTools": {
+    "go": "/Users/steven/.local/share/mise/installs/go/1.25.0/bin/go"
+  },
+  "go.toolsEnvVars": {
+    "GOROOT": "/Users/steven/.local/share/mise/installs/go/1.25.0",
+    "GOPATH": "/Users/steven/go",
+    "GOCACHE": "/tmp/go-build",
+    "PATH": "/Users/steven/.local/share/mise/installs/go/1.25.0/bin:/Users/steven/.local/share/mise/shims:/Users/steven/go/bin:${env:PATH}"
+  },
   "go.formatTool": "gofmt",
   "go.lintTool": "staticcheck",
   "go.testFlags": [
@@ -8,5 +18,8 @@
   ],
   "go.testEnvVars": {
     "GOCACHE": "/tmp/go-build"
+  },
+  "terminal.integrated.env.osx": {
+    "PATH": "/Users/steven/.local/share/mise/installs/go/1.25.0/bin:/Users/steven/.local/share/mise/shims:/Users/steven/.local/bin:${env:PATH}"
   }
 }

@@ -9,6 +9,7 @@ import (
 
 	vmsflv "go-cam-server/internal/flv"
 	"go-cam-server/internal/stream"
+	"go-cam-server/internal/tracectx"
 )
 
 const relayBufSize = 128
@@ -30,7 +31,9 @@ const relayBufSize = 128
 //	                              └─► http.ResponseWriter   ──► Node B
 type RelaySubscriber struct {
 	id      string
+	streamKey string
 	w       io.Writer
+	trace   tracectx.Context
 	ch      chan *stream.AVPacket
 	dropped atomic.Uint64
 	done    chan struct{}
@@ -39,12 +42,14 @@ type RelaySubscriber struct {
 // NewRelaySubscriber creates a subscriber that writes FLV tags to w.
 // The caller must have already written the FLV file header to w before
 // creating this subscriber (via flv.WriteFileHeader).
-func NewRelaySubscriber(streamKey string, w io.Writer) *RelaySubscriber {
+func NewRelaySubscriber(streamKey string, w io.Writer, tc tracectx.Context) *RelaySubscriber {
 	s := &RelaySubscriber{
-		id:   fmt.Sprintf("relay-%s", streamKey),
-		w:    w,
-		ch:   make(chan *stream.AVPacket, relayBufSize),
-		done: make(chan struct{}),
+		id:        fmt.Sprintf("relay-%s", streamKey),
+		streamKey: streamKey,
+		w:         w,
+		trace:     tc,
+		ch:        make(chan *stream.AVPacket, relayBufSize),
+		done:      make(chan struct{}),
 	}
 	go s.run()
 	return s
@@ -79,12 +84,20 @@ func (s *RelaySubscriber) run() {
 			}
 			if err := vmsflv.WriteTag(s.w, pkt); err != nil {
 				// Network write failed — Node B disconnected
-				logrus.Infof("relay-sub[%s]: write error (client gone): %v", s.id, err)
+				logrus.WithFields(s.fields()).WithError(err).Info("relay_sub.write_failed")
 				return
 			}
 		case <-s.done:
-			logrus.Infof("relay-sub[%s]: closed", s.id)
+			logrus.WithFields(s.fields()).Info("relay_sub.closed")
 			return
 		}
 	}
+}
+
+func (s *RelaySubscriber) fields() logrus.Fields {
+	fields := tracectx.FieldsFromTrace(s.trace)
+	fields["stream_key"] = s.streamKey
+	fields["subscriber_id"] = s.id
+	fields["subscriber_type"] = stream.TypeRelay.String()
+	return fields
 }

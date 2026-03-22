@@ -21,6 +21,7 @@
 //	GET  /pion/webrtc/:key/demo      — demo HTML page that negotiates with the offer endpoint
 //	GET  /playback/:key/timespans    — list MediaMTX playback timespans
 //	GET  /control/health             — control-plane dependency health & mode
+//	GET  /control/media-mtx          — detailed MediaMTX status from control-plane
 //	GET  /control/slo                — current SLO targets/failure budgets
 //	GET  /nodes                      — list cluster nodes from Redis
 //	GET  /monitor/priority           — ranked stream list for monitor grid
@@ -45,6 +46,7 @@ import (
 	vmsrtsp "go-cam-server/internal/rtsp"
 	"go-cam-server/internal/stream"
 	"go-cam-server/internal/subscriber"
+	"go-cam-server/internal/tracectx"
 )
 
 type Server struct {
@@ -84,8 +86,8 @@ func NewServer(
 
 	var relayMgr *node.RelayManager
 	if registry != nil {
-		relayMgr = node.NewRelayManager(registry, manager, func(key string) []stream.Subscriber {
-			return subFactory.RelaySubscribers(key, cfg)
+		relayMgr = node.NewRelayManager(registry, manager, func(key string, tc tracectx.Context) []stream.Subscriber {
+			return subFactory.RelaySubscribers(key, cfg, tc)
 		})
 	}
 
@@ -123,10 +125,14 @@ func (s *Server) buildRouter() *chi.Mux {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
+	r.Use(s.traceMiddleware)
 	r.Use(s.slowRequestMiddleware)
 	r.Use(middleware.Recoverer)
 
-	// ── MediaMTX ingest webhooks (called by MediaMTX runOnPublish hooks) ──────
+	// Mount pprof profiling endpoints
+	r.Mount("/debug", middleware.Profiler())
+
+	// ── MediaMTX ingest webhooks (called by MediaMTX ready/not-ready hooks) ───
 	r.Post("/internal/on-publish", s.onPublish)
 	r.Post("/internal/on-unpublish", s.onUnpublish)
 
@@ -144,6 +150,7 @@ func (s *Server) buildRouter() *chi.Mux {
 		r.Use(jsonContentType)
 
 		r.Get("/control/health", s.controlHealth)
+		r.Get("/control/media-mtx", s.controlMediaMTX)
 		r.Get("/control/slo", s.controlSLO)
 		r.Get("/streams", s.listStreams)
 		r.Get("/streams/{key}", s.getStream)

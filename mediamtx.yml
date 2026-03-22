@@ -21,7 +21,16 @@ apiAddress: :9997
 playback: yes
 playbackAddress: :9996
 
-# No-auth mode (temporary): no auth users configured.
+# Explicitly allow no-auth for all IPs (bypasses default localhost restriction)
+authInternalUsers:
+- user: any
+  pass:
+  ips: [] # Allow any IP
+  permissions:
+  - action: api
+  - action: read
+  - action: publish
+  - action: playback
 
 pathDefaults:
   source: publisher
@@ -31,10 +40,10 @@ pathDefaults:
   recordPartDuration: 1s
   recordSegmentDuration: 1m
   recordDeleteAfter: 72h
-  # Notify Go server when a camera starts/stops publishing.
+  # Notify Go server when a stream becomes ready / not ready.
   # The Go server pulls RTSP from MediaMTX and feeds its own subscriber pipeline.
-  runOnPublish: curl -sf -X POST "http://localhost:8080/internal/on-publish?path=$MTX_PATH"
-  runOnUnpublish: curl -sf -X POST "http://localhost:8080/internal/on-unpublish?path=$MTX_PATH"
+  runOnReady: curl -sf -X POST "http://server:8080/internal/on-publish?path=$MTX_PATH&source_type=$MTX_SOURCE_TYPE&source_id=$MTX_SOURCE_ID&traceparent=$MTX_TRACEPARENT"
+  runOnNotReady: curl -sf -X POST "http://server:8080/internal/on-unpublish?path=$MTX_PATH&source_type=$MTX_SOURCE_TYPE&source_id=$MTX_SOURCE_ID&traceparent=$MTX_TRACEPARENT"
 
 paths:
   all:

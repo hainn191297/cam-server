@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/sirupsen/logrus"
+
+	"go-cam-server/internal/tracectx"
 )
 
 const ingestBufSize = 64
@@ -30,6 +32,7 @@ type liveStream struct {
 
 	packetsTotal atomic.Uint64
 	startedAt    time.Time
+	trace        tracectx.Context
 	closed       bool
 	closedMu     sync.Mutex
 }
@@ -42,6 +45,7 @@ func newLiveStream(key string, pub Publisher) *liveStream {
 		ingest:    make(chan *AVPacket, ingestBufSize),
 		done:      make(chan struct{}),
 		startedAt: time.Now(),
+		trace:     traceContextFromPublisher(pub),
 	}
 	go s.pump()
 	return s
@@ -92,7 +96,7 @@ func (s *liveStream) Ingest(pkt *AVPacket) {
 	select {
 	case s.ingest <- pkt:
 	default:
-		logrus.Warnf("stream %s: ingest buffer full, dropping packet", s.key)
+		logrus.WithFields(streamFields(s.key, s.publisher.NodeID(), s.trace)).Warn("stream.ingest_buffer_full")
 	}
 }
 
@@ -100,7 +104,10 @@ func (s *liveStream) AddSubscriber(sub Subscriber) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.subs[sub.ID()] = sub
-	logrus.Infof("stream %s: +subscriber %s [%s]", s.key, sub.ID(), sub.Type())
+	fields := streamFields(s.key, s.publisher.NodeID(), s.trace)
+	fields["subscriber_id"] = sub.ID()
+	fields["subscriber_type"] = sub.Type().String()
+	logrus.WithFields(fields).Info("stream.subscriber_added")
 	return nil
 }
 
@@ -113,7 +120,9 @@ func (s *liveStream) RemoveSubscriber(id string) {
 	}
 	s.mu.Unlock()
 	if ok {
-		logrus.Infof("stream %s: -subscriber %s", s.key, id)
+		fields := streamFields(s.key, s.publisher.NodeID(), s.trace)
+		fields["subscriber_id"] = id
+		logrus.WithFields(fields).Info("stream.subscriber_removed")
 	}
 }
 
@@ -144,7 +153,7 @@ func (s *liveStream) Close() {
 	s.mu.Unlock()
 
 	close(s.done)
-	logrus.Infof("stream %s: closed", s.key)
+	logrus.WithFields(streamFields(s.key, s.publisher.NodeID(), s.trace)).Info("stream.closed")
 }
 
 func (s *liveStream) Stats() StreamStats {
@@ -156,4 +165,16 @@ func (s *liveStream) Stats() StreamStats {
 		PacketsTotal:    s.packetsTotal.Load(),
 		StartedAt:       s.startedAt,
 	}
+}
+
+func (s *liveStream) traceContext() tracectx.Context {
+	return s.trace
+}
+
+func traceContextFromPublisher(pub Publisher) tracectx.Context {
+	carrier, ok := pub.(TraceCarrier)
+	if !ok {
+		return tracectx.Context{}
+	}
+	return carrier.TraceContext()
 }

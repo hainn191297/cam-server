@@ -1,0 +1,34 @@
+# Version control
+.git/
+.gitignore
+
+# Docker config
+.dockerignore
+docker-compose.yml
+
+# IDEs
+.vscode/
+.idea/
+.DS_Store
+
+# Media files & storage (để tránh rớt dung lượng lớn vào Docker Context)
+hls/
+storage/
+recordings/
+logs/
+tmp/
+*.log
+*.m3u8
+*.ts
+*.flv
+*.mp4
+
+# Build outputs
+bin/
+dist/
+vendor/
+
+# Docs & Dev tools
+*.md
+Makefile
+*.sh

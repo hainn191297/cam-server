@@ -11,6 +11,7 @@ import (
 
 	vmsflv "go-cam-server/internal/flv"
 	"go-cam-server/internal/stream"
+	"go-cam-server/internal/tracectx"
 )
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -26,6 +27,7 @@ type RelayPublisher struct {
 	key       string
 	sourceID  string // ID of the node that has the real camera
 	startedAt time.Time
+	trace     tracectx.Context
 	cancel    context.CancelFunc
 }
 
@@ -34,6 +36,9 @@ func (p *RelayPublisher) NodeID() string               { return p.sourceID + "(r
 func (p *RelayPublisher) StartedAt() time.Time         { return p.startedAt }
 func (p *RelayPublisher) Stats() stream.PublisherStats { return stream.PublisherStats{} }
 func (p *RelayPublisher) Stop()                        { p.cancel() }
+func (p *RelayPublisher) TraceContext() tracectx.Context {
+	return p.trace
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RelayManager — tracks active relay connections on this node.
@@ -49,13 +54,13 @@ type RelayManager struct {
 
 	registry   *Registry
 	manager    *stream.StreamManager
-	subFactory func(streamKey string) []stream.Subscriber
+	subFactory func(streamKey string, tc tracectx.Context) []stream.Subscriber
 }
 
 func NewRelayManager(
 	registry *Registry,
 	manager *stream.StreamManager,
-	subFactory func(string) []stream.Subscriber,
+	subFactory func(string, tracectx.Context) []stream.Subscriber,
 ) *RelayManager {
 	return &RelayManager{
 		active:     make(map[string]context.CancelFunc),
@@ -81,7 +86,11 @@ func (m *RelayManager) EnsureRelay(ctx context.Context, streamKey, sourceNodeID 
 		return nil // already relaying
 	}
 
-	relayCtx, cancel := context.WithCancel(ctx)
+	relayCtx := context.WithoutCancel(ctx)
+	if tc, ok := tracectx.FromContext(ctx); ok {
+		relayCtx = tracectx.WithContext(relayCtx, tracectx.Child(tc))
+	}
+	relayCtx, cancel := context.WithCancel(relayCtx)
 	m.active[streamKey] = cancel
 	m.mu.Unlock()
 
@@ -125,30 +134,36 @@ func (m *RelayManager) pull(ctx context.Context, streamKey, sourceAddr, sourceNo
 	defer m.manager.Unregister(streamKey)
 
 	url := "http://" + sourceAddr + "/relay/" + streamKey
-	logrus.Infof("relay[%s]: pulling from %s", streamKey, url)
+	fields := relayFields(ctx, streamKey, sourceNodeID)
+	fields["source_addr"] = sourceAddr
+	logrus.WithFields(fields).Info("relay.pull.start")
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		logrus.Errorf("relay[%s]: build request: %v", streamKey, err)
+		logrus.WithFields(fields).WithError(err).Error("relay.pull.build_request_failed")
 		return
+	}
+	if tc, ok := tracectx.FromContext(ctx); ok {
+		req.Header.Set("traceparent", tc.Traceparent)
 	}
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		logrus.Errorf("relay[%s]: connect to %s: %v", streamKey, url, err)
+		logrus.WithFields(fields).WithError(err).Error("relay.pull.connect_failed")
 		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		logrus.Errorf("relay[%s]: upstream returned %d", streamKey, resp.StatusCode)
+		fields["status"] = resp.StatusCode
+		logrus.WithFields(fields).Error("relay.pull.upstream_status_not_ok")
 		return
 	}
 
 	// Parse the incoming FLV stream using our own reader.
 	reader, err := vmsflv.NewReader(resp.Body)
 	if err != nil {
-		logrus.Errorf("relay[%s]: FLV reader init: %v", streamKey, err)
+		logrus.WithFields(fields).WithError(err).Error("relay.pull.reader_init_failed")
 		return
 	}
 
@@ -157,20 +172,21 @@ func (m *RelayManager) pull(ctx context.Context, streamKey, sourceAddr, sourceNo
 		key:       streamKey,
 		sourceID:  sourceNodeID,
 		startedAt: time.Now(),
+		trace:     traceContextValue(ctx),
 		cancel:    func() {},
 	}
 	liveStream, err := m.manager.Register(pub)
 	if err != nil {
-		logrus.Errorf("relay[%s]: register stream: %v", streamKey, err)
+		logrus.WithFields(fields).WithError(err).Error("relay.pull.register_failed")
 		return
 	}
 
 	// Attach the same default subscribers as a local camera.
-	for _, sub := range m.subFactory(streamKey) {
+	for _, sub := range m.subFactory(streamKey, traceContextValue(ctx)) {
 		_ = liveStream.AddSubscriber(sub)
 	}
 
-	logrus.Infof("relay[%s]: stream registered, receiving from %s", streamKey, sourceAddr)
+	logrus.WithFields(fields).Info("relay.pull.streaming")
 
 	// Pump AVPackets into the local stream.
 	// Each call to reader.Next() already returns a freshly allocated AVPacket
@@ -178,7 +194,7 @@ func (m *RelayManager) pull(ctx context.Context, streamKey, sourceAddr, sourceNo
 	for {
 		pkt, err := reader.Next()
 		if err != nil {
-			logrus.Infof("relay[%s]: upstream ended: %v", streamKey, err)
+			logrus.WithFields(fields).WithError(err).Info("relay.pull.upstream_ended")
 			return
 		}
 		liveStream.Ingest(pkt)
@@ -189,4 +205,18 @@ func (m *RelayManager) remove(key string) {
 	m.mu.Lock()
 	delete(m.active, key)
 	m.mu.Unlock()
+}
+
+func relayFields(ctx context.Context, streamKey, sourceNodeID string) logrus.Fields {
+	fields := tracectx.Fields(ctx)
+	fields["stream_key"] = streamKey
+	if sourceNodeID != "" {
+		fields["source_node_id"] = sourceNodeID
+	}
+	return fields
+}
+
+func traceContextValue(ctx context.Context) tracectx.Context {
+	tc, _ := tracectx.FromContext(ctx)
+	return tc
 }

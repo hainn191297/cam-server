@@ -1,4 +1,4 @@
-.PHONY: run run-config build tidy test clean proto-gen up down logs test-push test-push-lavfi test-play test-api test-live-streams test-live-urls test-playback-timespans test-playback-streams test-playback
+.PHONY: run run-config build tidy test clean proto-gen up down logs mediamtx-image mediamtx-logs test-push test-push-lavfi test-play test-api test-live-streams test-live-urls test-playback-timespans test-playback-streams test-playback test-control-health test-control-mediamtx mediamtx-build mediamtx-update
 
 # Run the server with defaults
 run:
@@ -20,9 +20,25 @@ down:
 logs:
 	docker compose logs -f server
 
+# Build the local custom MediaMTX image from third_party/mediamtx
+mediamtx-image:
+	docker compose build mediamtx
+
+# Tail MediaMTX logs
+mediamtx-logs:
+	docker compose logs -f mediamtx
+
 # Build binary
 build:
 	go build -o bin/go-cam-server ./cmd/server
+
+# Build MediaMTX binary from the git submodule (third_party/mediamtx)
+mediamtx-build:
+	cd third_party/mediamtx && go build -o ../../mediamtx .
+
+# Pull latest changes from MediaMTX upstream
+mediamtx-update:
+	git submodule update --remote third_party/mediamtx
 
 # Tidy modules
 tidy:
@@ -65,6 +81,14 @@ test-api:
 	curl -s http://localhost:8080/monitor/priority | jq
 	curl -s http://localhost:8080/nodes | jq
 
+# Control-plane dependency health
+test-control-health:
+	curl -s http://localhost:8080/control/health | jq
+
+# Detailed MediaMTX status via go-cam-server
+test-control-mediamtx:
+	curl -s http://localhost:8080/control/media-mtx | jq
+
 # Live API: list MediaMTX streams with direct URLs
 test-live-streams:
 	curl -s http://localhost:8080/live/streams | jq
@@ -84,3 +108,8 @@ test-playback-streams:
 # Playback API: list recording objects + presigned URLs for one stream
 test-playback:
 	curl -s "http://localhost:8080/playback/cam1/recordings?limit=20" | jq
+
+# Run load test script (default 10 cams: make load-test CAMS=20)
+load-test:
+	chmod +x scripts/load_test.sh
+	./scripts/load_test.sh $(CAMS)

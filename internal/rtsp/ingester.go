@@ -9,7 +9,7 @@
 // Flow:
 //
 //	Camera ──RTMP──► MediaMTX :1935
-//	                     │ runOnPublish webhook
+//	                     │ runOnReady webhook
 //	                     ▼
 //	         POST /internal/on-publish?path=cam1
 //	                     │
@@ -45,6 +45,7 @@ import (
 	"go-cam-server/config"
 	"go-cam-server/internal/stream"
 	"go-cam-server/internal/subscriber"
+	"go-cam-server/internal/tracectx"
 )
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -55,6 +56,7 @@ type rtspPublisher struct {
 	key       string
 	nodeID    string
 	startedAt time.Time
+	trace     tracectx.Context
 }
 
 func (p *rtspPublisher) StreamKey() string            { return p.key }
@@ -62,6 +64,9 @@ func (p *rtspPublisher) NodeID() string               { return p.nodeID }
 func (p *rtspPublisher) StartedAt() time.Time         { return p.startedAt }
 func (p *rtspPublisher) Stats() stream.PublisherStats { return stream.PublisherStats{} }
 func (p *rtspPublisher) Stop()                        {}
+func (p *rtspPublisher) TraceContext() tracectx.Context {
+	return p.trace
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // IngestManager — tracks active RTSP pull sessions, one per stream key.
@@ -97,7 +102,11 @@ func (m *IngestManager) Start(ctx context.Context, streamKey string) error {
 		m.mu.Unlock()
 		return nil // already ingesting
 	}
-	ingCtx, cancel := context.WithCancel(ctx)
+	ingCtx := context.WithoutCancel(ctx)
+	if tc, ok := tracectx.FromContext(ctx); ok {
+		ingCtx = tracectx.WithContext(ingCtx, tracectx.Child(tc))
+	}
+	ingCtx, cancel := context.WithCancel(ingCtx)
 	m.sessions[streamKey] = cancel
 	m.mu.Unlock()
 
@@ -131,11 +140,11 @@ func (m *IngestManager) ingest(ctx context.Context, streamKey string) {
 	defer m.remove(streamKey)
 
 	rtspURL := m.cfg.MediaMTX.RTSPBaseURL + "/" + streamKey
-	logrus.Infof("rtsp-ingest[%s]: pulling from %s", streamKey, rtspURL)
+	logrus.WithFields(traceFields(ctx, streamKey)).Infof("rtsp-ingest[%s]: pulling from %s", streamKey, rtspURL)
 
 	u, err := base.ParseURL(rtspURL)
 	if err != nil {
-		logrus.Errorf("rtsp-ingest[%s]: parse URL: %v", streamKey, err)
+		logrus.WithFields(traceFields(ctx, streamKey)).WithError(err).Errorf("rtsp-ingest[%s]: parse URL", streamKey)
 		return
 	}
 
@@ -144,14 +153,14 @@ func (m *IngestManager) ingest(ctx context.Context, streamKey string) {
 		Host:   u.Host,
 	}
 	if err = client.Start(); err != nil {
-		logrus.Errorf("rtsp-ingest[%s]: connect: %v", streamKey, err)
+		logrus.WithFields(traceFields(ctx, streamKey)).WithError(err).Errorf("rtsp-ingest[%s]: connect", streamKey)
 		return
 	}
 	defer client.Close()
 
 	desc, _, err := client.Describe(u)
 	if err != nil {
-		logrus.Errorf("rtsp-ingest[%s]: describe: %v", streamKey, err)
+		logrus.WithFields(traceFields(ctx, streamKey)).WithError(err).Errorf("rtsp-ingest[%s]: describe", streamKey)
 		return
 	}
 
@@ -168,7 +177,7 @@ func (m *IngestManager) ingest(ctx context.Context, streamKey string) {
 		audioMed = medi
 	}
 	if videoMed == nil && audioMed == nil {
-		logrus.Errorf("rtsp-ingest[%s]: no supported formats (need H264 or MPEG4Audio)", streamKey)
+		logrus.WithFields(traceFields(ctx, streamKey)).Errorf("rtsp-ingest[%s]: no supported formats (need H264 or MPEG4Audio)", streamKey)
 		return
 	}
 
@@ -181,7 +190,7 @@ func (m *IngestManager) ingest(ctx context.Context, streamKey string) {
 	}
 
 	if err = client.SetupAll(desc.BaseURL, medias); err != nil {
-		logrus.Errorf("rtsp-ingest[%s]: setup: %v", streamKey, err)
+		logrus.WithFields(traceFields(ctx, streamKey)).WithError(err).Errorf("rtsp-ingest[%s]: setup", streamKey)
 		return
 	}
 
@@ -190,15 +199,16 @@ func (m *IngestManager) ingest(ctx context.Context, streamKey string) {
 		key:       streamKey,
 		nodeID:    m.cfg.Node.ID,
 		startedAt: time.Now(),
+		trace:     traceContextValue(ctx),
 	}
 	liveStream, err := m.manager.Register(pub)
 	if err != nil {
-		logrus.Errorf("rtsp-ingest[%s]: register stream: %v", streamKey, err)
+		logrus.WithFields(traceFields(ctx, streamKey)).WithError(err).Errorf("rtsp-ingest[%s]: register stream", streamKey)
 		return
 	}
 
 	// Attach default subscribers (HLS, Storage, MinIO).
-	for _, sub := range m.subFactory.PublishSubscribers(streamKey, m.cfg) {
+	for _, sub := range m.subFactory.PublishSubscribers(streamKey, m.cfg, traceContextValue(ctx)) {
 		_ = liveStream.AddSubscriber(sub)
 	}
 
@@ -233,7 +243,7 @@ func (m *IngestManager) ingest(ctx context.Context, streamKey string) {
 	if h264fmt != nil {
 		dec, err := h264fmt.CreateDecoder()
 		if err != nil {
-			logrus.Errorf("rtsp-ingest[%s]: create H264 decoder: %v", streamKey, err)
+			logrus.WithFields(traceFields(ctx, streamKey)).WithError(err).Errorf("rtsp-ingest[%s]: create H264 decoder", streamKey)
 			return
 		}
 
@@ -248,7 +258,7 @@ func (m *IngestManager) ingest(ctx context.Context, streamKey string) {
 			if decErr != nil {
 				if !errors.Is(decErr, rtph264.ErrMorePacketsNeeded) &&
 					!errors.Is(decErr, rtph264.ErrNonStartingPacketAndNoPrevious) {
-					logrus.Debugf("rtsp-ingest[%s]: H264 decode: %v", streamKey, decErr)
+					logrus.WithFields(traceFields(ctx, streamKey)).WithError(decErr).Debugf("rtsp-ingest[%s]: H264 decode", streamKey)
 				}
 				return
 			}
@@ -301,7 +311,7 @@ func (m *IngestManager) ingest(ctx context.Context, streamKey string) {
 	if aacFmt != nil {
 		dec, err := aacFmt.CreateDecoder()
 		if err != nil {
-			logrus.Errorf("rtsp-ingest[%s]: create AAC decoder: %v", streamKey, err)
+			logrus.WithFields(traceFields(ctx, streamKey)).WithError(err).Errorf("rtsp-ingest[%s]: create AAC decoder", streamKey)
 			return
 		}
 
@@ -317,7 +327,7 @@ func (m *IngestManager) ingest(ctx context.Context, streamKey string) {
 			aus, decErr := dec.Decode(pkt)
 			if decErr != nil {
 				if !errors.Is(decErr, rtpmpeg4audio.ErrMorePacketsNeeded) {
-					logrus.Debugf("rtsp-ingest[%s]: AAC decode: %v", streamKey, decErr)
+					logrus.WithFields(traceFields(ctx, streamKey)).WithError(decErr).Debugf("rtsp-ingest[%s]: AAC decode", streamKey)
 				}
 				return
 			}
@@ -344,10 +354,10 @@ func (m *IngestManager) ingest(ctx context.Context, streamKey string) {
 
 	// Start the RTSP stream.
 	if _, err = client.Play(nil); err != nil {
-		logrus.Errorf("rtsp-ingest[%s]: play: %v", streamKey, err)
+		logrus.WithFields(traceFields(ctx, streamKey)).WithError(err).Errorf("rtsp-ingest[%s]: play", streamKey)
 		return
 	}
-	logrus.Infof("rtsp-ingest[%s]: streaming", streamKey)
+	logrus.WithFields(traceFields(ctx, streamKey)).Infof("rtsp-ingest[%s]: streaming", streamKey)
 
 	// Block until context is cancelled (on-unpublish) or upstream ends.
 	waitDone := make(chan error, 1)
@@ -355,10 +365,21 @@ func (m *IngestManager) ingest(ctx context.Context, streamKey string) {
 
 	select {
 	case <-ctx.Done():
-		logrus.Infof("rtsp-ingest[%s]: stopped (context cancelled)", streamKey)
+		logrus.WithFields(traceFields(ctx, streamKey)).Infof("rtsp-ingest[%s]: stopped (context cancelled)", streamKey)
 	case err = <-waitDone:
-		logrus.Infof("rtsp-ingest[%s]: upstream ended: %v", streamKey, err)
+		logrus.WithFields(traceFields(ctx, streamKey)).WithError(err).Infof("rtsp-ingest[%s]: upstream ended", streamKey)
 	}
+}
+
+func traceFields(ctx context.Context, streamKey string) logrus.Fields {
+	fields := tracectx.Fields(ctx)
+	fields["stream_key"] = streamKey
+	return fields
+}
+
+func traceContextValue(ctx context.Context) tracectx.Context {
+	tc, _ := tracectx.FromContext(ctx)
+	return tc
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

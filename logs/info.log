@@ -21,3 +21,8 @@
 {"level":"info","msg":"received signal interrupt, shutting down","time":"2026-02-24T19:09:39.997359+07:00"}
 {"level":"info","msg":"shutdown: deregistering node","time":"2026-02-24T19:09:39.998437+07:00"}
 {"level":"info","msg":"shutdown complete","time":"2026-02-24T19:09:40.624056+07:00"}
+{"level":"info","msg":"starting node=node-1 role=master","time":"2026-03-03T17:08:18.68777+07:00"}
+{"level":"info","msg":"minio: disabled — recordings stored locally only","time":"2026-03-03T17:08:18.688111+07:00"}
+{"level":"info","msg":"redis: connected to localhost:6379","time":"2026-03-03T17:08:18.702927+07:00"}
+{"level":"info","msg":"node-registry: started (redis=localhost:6379)","time":"2026-03-03T17:08:18.702974+07:00"}
+{"level":"info","msg":"http: starting on :8080","time":"2026-03-03T17:08:18.703262+07:00"}

@@ -13,6 +13,7 @@ import (
 	vmslogging "go-cam-server/internal/logging"
 	vmsminio "go-cam-server/internal/minio"
 	"go-cam-server/internal/stream"
+	"go-cam-server/internal/tracectx"
 )
 
 const minioBufSize = 512
@@ -33,6 +34,7 @@ type MinIOSubscriber struct {
 	streamKey   string
 	client      *vmsminio.Client
 	segmentSecs int
+	trace       tracectx.Context
 
 	ch      chan *stream.AVPacket
 	dropped atomic.Uint64
@@ -42,7 +44,7 @@ type MinIOSubscriber struct {
 	uploadBytes atomic.Int64
 }
 
-func NewMinIOSubscriber(streamKey string, client *vmsminio.Client, segmentSecs int) *MinIOSubscriber {
+func NewMinIOSubscriber(streamKey string, client *vmsminio.Client, segmentSecs int, tc tracectx.Context) *MinIOSubscriber {
 	if segmentSecs <= 0 {
 		segmentSecs = 10
 	}
@@ -51,6 +53,7 @@ func NewMinIOSubscriber(streamKey string, client *vmsminio.Client, segmentSecs i
 		streamKey:   streamKey,
 		client:      client,
 		segmentSecs: segmentSecs,
+		trace:       tc,
 		ch:          make(chan *stream.AVPacket, minioBufSize),
 		done:        make(chan struct{}),
 	}
@@ -95,7 +98,7 @@ func (s *MinIOSubscriber) run() {
 				return
 			}
 			if err := vmsflv.WriteTag(buf, pkt); err != nil {
-				logrus.Warnf("minio-sub[%s]: write tag: %v", s.streamKey, err)
+				logrus.WithFields(s.fields()).WithError(err).Warnf("minio-sub[%s]: write tag", s.streamKey)
 			}
 
 		case <-ticker.C:
@@ -111,7 +114,9 @@ func (s *MinIOSubscriber) run() {
 			if data := buf.Bytes(); len(data) > 0 {
 				s.upload(data)
 			}
-			logrus.Infof("minio-sub[%s]: closed (uploads=%d)", s.streamKey, s.uploadCount.Load())
+			fields := s.fields()
+			fields["uploads"] = s.uploadCount.Load()
+			logrus.WithFields(fields).Info("minio_sub.closed")
 			return
 		}
 	}
@@ -120,7 +125,7 @@ func (s *MinIOSubscriber) run() {
 func (s *MinIOSubscriber) newBuffer() *bytes.Buffer {
 	buf := new(bytes.Buffer)
 	if err := vmsflv.WriteFileHeader(buf); err != nil {
-		logrus.Errorf("minio-sub[%s]: write FLV header: %v", s.streamKey, err)
+		logrus.WithFields(s.fields()).WithError(err).Errorf("minio-sub[%s]: write FLV header", s.streamKey)
 	}
 	return buf
 }
@@ -133,26 +138,35 @@ func (s *MinIOSubscriber) upload(data []byte) {
 	key, err := s.client.UploadSegment(ctx, s.streamKey, data)
 	elapsed := time.Since(started)
 	if err != nil {
-		logrus.Errorf("minio-sub[%s]: upload failed: %v", s.streamKey, err)
+		logrus.WithFields(s.fields()).WithError(err).Errorf("minio-sub[%s]: upload failed", s.streamKey)
 		return
 	}
 
 	s.uploadCount.Add(1)
 	s.uploadBytes.Add(int64(len(data)))
 
-	vmslogging.Stat("minio.segment_uploaded", logrus.Fields{
-		"stream_key": s.streamKey,
-		"object_key": key,
-		"bytes":      len(data),
-		"elapsed_ms": elapsed.Milliseconds(),
-		"uploads":    s.uploadCount.Load(),
-	})
+	statFields := s.fields()
+	statFields["object_key"] = key
+	statFields["bytes"] = len(data)
+	statFields["elapsed_ms"] = elapsed.Milliseconds()
+	statFields["uploads"] = s.uploadCount.Load()
+	vmslogging.Stat("minio.segment_uploaded", statFields)
 
-	vmslogging.SlowIfExceeds("minio.segment_upload", elapsed, logrus.Fields{
-		"stream_key": s.streamKey,
-		"object_key": key,
-		"bytes":      len(data),
-	})
+	slowFields := s.fields()
+	slowFields["object_key"] = key
+	slowFields["bytes"] = len(data)
+	vmslogging.SlowIfExceeds("minio.segment_upload", elapsed, slowFields)
 
-	logrus.Infof("minio-sub[%s]: uploaded %s (%d KB)", s.streamKey, key, len(data)/1024)
+	infoFields := s.fields()
+	infoFields["object_key"] = key
+	infoFields["kilobytes"] = len(data) / 1024
+	logrus.WithFields(infoFields).Info("minio_sub.uploaded")
+}
+
+func (s *MinIOSubscriber) fields() logrus.Fields {
+	fields := tracectx.FieldsFromTrace(s.trace)
+	fields["stream_key"] = s.streamKey
+	fields["subscriber_id"] = s.id
+	fields["subscriber_type"] = stream.TypeMinIO.String()
+	return fields
 }

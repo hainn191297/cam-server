@@ -1,0 +1,92 @@
+syntax = "proto3";
+
+package vms.v1;
+
+option go_package = "go-cam-server/internal/grpc/pb";
+
+// =========================================================================
+// 1. Client-to-Server API (Dành cho Mobile App / Web App)
+// =========================================================================
+
+service AppService {
+  // Lấy danh sách tất cả các luồng camera đang phát
+  rpc ListLiveStreams(ListStreamsRequest) returns (ListStreamsResponse);
+
+  // Lấy danh sách camera ưu tiên (dùng cho màn hình Monitor Grid)
+  rpc GetMonitorPriority(MonitorPriorityRequest) returns (MonitorPriorityResponse);
+
+  // Đổi token RTSP/WebRTC sang phiên (Session/Lease) - bảo mật
+  rpc CreateLiveSession(CreateSessionRequest) returns (CreateSessionResponse);
+}
+
+message ListStreamsRequest {
+  string filter_source = 1;
+}
+
+message StreamInfo {
+  string stream_key = 1;
+  string node_id = 2;
+  int32 viewer_count = 3;
+  int64 uptime_seconds = 4;
+}
+
+message ListStreamsResponse {
+  repeated StreamInfo streams = 1;
+}
+
+message MonitorPriorityRequest {
+  int32 max_results = 1;
+}
+
+message MonitorPriorityResponse {
+  repeated StreamScore streams = 1;
+}
+
+message StreamScore {
+  string stream_key = 1;
+  double score = 2;
+  bool is_pinned = 3;
+}
+
+message CreateSessionRequest {
+  string stream_key = 1;
+  string access_token = 2;
+}
+
+message CreateSessionResponse {
+  string webrtc_url = 1;
+  string hls_url = 2;
+}
+
+// =========================================================================
+// 2. Server-to-Server API (Dành cho gRPC Relay giữa các Node)
+// =========================================================================
+
+service RelayService {
+  // Pull luồng video thời gian thực từ Node này sang Node khác (FLV Stream)
+  rpc PullStream(PullStreamRequest) returns (stream FLVPacket);
+
+  // Heartbeat/Sync danh sách camera nội bộ giữa các Node (thay Redis hoặc bổ trợ)
+  rpc SyncNodeState(NodeStateRequest) returns (NodeStateResponse);
+}
+
+message PullStreamRequest {
+  string stream_key = 1;
+  string consumer_node_id = 2;
+}
+
+message FLVPacket {
+  uint32 type = 1; // 8: Audio, 9: Video, 18: Script Data
+  uint32 timestamp_ms = 2;
+  bytes payload = 3;
+}
+
+message NodeStateRequest {
+  string node_id = 1;
+  int32 active_streams = 2;
+  int64 cpu_usage_pct = 3;
+}
+
+message NodeStateResponse {
+  bool acknowledged = 1;
+}

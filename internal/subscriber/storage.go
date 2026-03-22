@@ -19,6 +19,7 @@ import (
 
 	vmsflv "go-cam-server/internal/flv"
 	"go-cam-server/internal/stream"
+	"go-cam-server/internal/tracectx"
 )
 
 const storageBufSize = 512
@@ -34,16 +35,18 @@ type StorageSubscriber struct {
 	id        string
 	streamKey string
 	rootPath  string
+	trace     tracectx.Context
 	ch        chan *stream.AVPacket
 	dropped   atomic.Uint64
 	done      chan struct{}
 }
 
-func NewStorageSubscriber(streamKey, rootPath string) *StorageSubscriber {
+func NewStorageSubscriber(streamKey, rootPath string, tc tracectx.Context) *StorageSubscriber {
 	s := &StorageSubscriber{
 		id:        fmt.Sprintf("storage-%s", streamKey),
 		streamKey: streamKey,
 		rootPath:  rootPath,
+		trace:     tc,
 		ch:        make(chan *stream.AVPacket, storageBufSize),
 		done:      make(chan struct{}),
 	}
@@ -75,24 +78,26 @@ func (s *StorageSubscriber) Close() {
 func (s *StorageSubscriber) run() {
 	dir := filepath.Join(s.rootPath, s.streamKey)
 	if err := os.MkdirAll(dir, 0755); err != nil {
-		logrus.Errorf("storage[%s]: mkdir failed: %v", s.streamKey, err)
+		logrus.WithFields(s.fields()).WithError(err).Errorf("storage[%s]: mkdir failed", s.streamKey)
 		return
 	}
 
 	filename := filepath.Join(dir, fmt.Sprintf("%d.flv", time.Now().UnixMilli()))
 	f, err := os.Create(filename)
 	if err != nil {
-		logrus.Errorf("storage[%s]: create file failed: %v", s.streamKey, err)
+		logrus.WithFields(s.fields()).WithError(err).Errorf("storage[%s]: create file failed", s.streamKey)
 		return
 	}
 	defer f.Close()
 
 	if err := vmsflv.WriteFileHeader(f); err != nil {
-		logrus.Errorf("storage[%s]: write FLV header: %v", s.streamKey, err)
+		logrus.WithFields(s.fields()).WithError(err).Errorf("storage[%s]: write FLV header", s.streamKey)
 		return
 	}
 
-	logrus.Infof("storage[%s]: writing to %s", s.streamKey, filename)
+	fields := s.fields()
+	fields["file"] = filename
+	logrus.WithFields(fields).Info("storage.opened")
 
 	for {
 		select {
@@ -101,11 +106,21 @@ func (s *StorageSubscriber) run() {
 				return
 			}
 			if err := vmsflv.WriteTag(f, pkt); err != nil {
-				logrus.Warnf("storage[%s]: write tag error: %v", s.streamKey, err)
+				logrus.WithFields(s.fields()).WithError(err).Warnf("storage[%s]: write tag error", s.streamKey)
 			}
 		case <-s.done:
-			logrus.Infof("storage[%s]: closed, file=%s", s.streamKey, filename)
+			fields := s.fields()
+			fields["file"] = filename
+			logrus.WithFields(fields).Info("storage.closed")
 			return
 		}
 	}
+}
+
+func (s *StorageSubscriber) fields() logrus.Fields {
+	fields := tracectx.FieldsFromTrace(s.trace)
+	fields["stream_key"] = s.streamKey
+	fields["subscriber_id"] = s.id
+	fields["subscriber_type"] = stream.TypeStorage.String()
+	return fields
 }

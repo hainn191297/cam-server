@@ -1,6 +1,7 @@
 package api
 
 import (
+	"maps"
 	"net/http"
 	"time"
 
@@ -8,7 +9,17 @@ import (
 	"github.com/sirupsen/logrus"
 
 	vmslogging "go-cam-server/internal/logging"
+	"go-cam-server/internal/tracectx"
 )
+
+func (s *Server) traceMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tc := tracectx.ExtractOrNew(r)
+		ctx := tracectx.WithContext(r.Context(), tc)
+		w.Header().Set("traceparent", tc.Traceparent)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
 
 func (s *Server) slowRequestMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -25,6 +36,7 @@ func (s *Server) slowRequestMiddleware(next http.Handler) http.Handler {
 			"remote_addr": r.RemoteAddr,
 			"elapsed_ms":  elapsed.Milliseconds(),
 		}
+		maps.Copy(fields, tracectx.Fields(r.Context()))
 		logrus.WithFields(fields).Info("http.request")
 		vmslogging.SlowIfExceeds("http.request", elapsed, fields)
 	})

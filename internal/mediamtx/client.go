@@ -65,6 +65,13 @@ type PlaybackSegment struct {
 	URL      string  `json:"url"`
 }
 
+type Summary struct {
+	PathCount      int        `json:"path_count"`
+	ReadyPathCount int        `json:"ready_path_count"`
+	BytesReceived  uint64     `json:"bytes_received"`
+	Paths          []PathInfo `json:"paths"`
+}
+
 func (c *Client) BuildLiveURLs(streamKey string) LiveURLs {
 	key := normalizePath(streamKey)
 	return LiveURLs{
@@ -126,8 +133,54 @@ func (c *Client) ListPaths(ctx context.Context) ([]PathInfo, error) {
 
 // Health performs a lightweight dependency probe for MediaMTX.
 func (c *Client) Health(ctx context.Context) error {
-	_, err := c.ListPaths(ctx)
-	return err
+	return c.Ping(ctx)
+}
+
+// Ping performs a lightweight dependency probe for MediaMTX.
+func (c *Client) Ping(ctx context.Context) error {
+	if c.cfg.APIBaseURL == "" {
+		return fmt.Errorf("mediamtx api_base_url is empty")
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.cfg.APIBaseURL+"/v3/config/global/get", nil)
+	if err != nil {
+		return err
+	}
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= http.StatusBadRequest {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("mediamtx ping: status=%d body=%s", resp.StatusCode, string(body))
+	}
+
+	_, _ = io.Copy(io.Discard, resp.Body)
+	return nil
+}
+
+// Summary returns a detailed snapshot that control-plane endpoints can expose
+// on demand without using it for every liveness probe.
+func (c *Client) Summary(ctx context.Context) (Summary, error) {
+	paths, err := c.ListPaths(ctx)
+	if err != nil {
+		return Summary{}, err
+	}
+
+	out := Summary{
+		PathCount: len(paths),
+		Paths:     paths,
+	}
+	for _, p := range paths {
+		if p.Ready {
+			out.ReadyPathCount++
+		}
+		out.BytesReceived += p.BytesReceived
+	}
+	return out, nil
 }
 
 func (c *Client) ListPlaybackSegments(ctx context.Context, streamKey string) ([]PlaybackSegment, error) {

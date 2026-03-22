@@ -5,6 +5,8 @@ import (
 	"sync"
 
 	"github.com/sirupsen/logrus"
+
+	"go-cam-server/internal/tracectx"
 )
 
 // StreamManager is the in-process registry of all active streams.
@@ -35,7 +37,7 @@ func (m *StreamManager) Register(pub Publisher) (Stream, error) {
 
 	s := newLiveStream(key, pub)
 	m.streams[key] = s
-	logrus.Infof("stream-manager: registered %s (node=%s)", key, pub.NodeID())
+	logrus.WithFields(streamFields(key, pub.NodeID(), traceContextFromPublisher(pub))).Info("stream_manager.registered")
 	return s, nil
 }
 
@@ -50,8 +52,17 @@ func (m *StreamManager) Unregister(key string) {
 
 	if ok {
 		s.Close()
-		logrus.Infof("stream-manager: unregistered %s", key)
+		logrus.WithFields(streamFields(key, "", s.traceContext())).Info("stream_manager.unregistered")
 	}
+}
+
+func streamFields(streamKey, nodeID string, tc tracectx.Context) logrus.Fields {
+	fields := tracectx.FieldsFromTrace(tc)
+	fields["stream_key"] = streamKey
+	if nodeID != "" {
+		fields["node_id"] = nodeID
+	}
+	return fields
 }
 
 // Get returns the stream for the given key.
