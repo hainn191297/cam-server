@@ -194,6 +194,16 @@ func (s *HLSSubscriber) run() {
 	}
 }
 
+var playlistTmpl = template.Must(template.New("m3u8").Parse(`#EXTM3U
+#EXT-X-VERSION:3
+#EXT-X-TARGETDURATION:{{.TargetDuration}}
+#EXT-X-MEDIA-SEQUENCE:{{.MediaSeq}}
+{{- range .Segments}}
+#EXTINF:{{printf "%.3f" .Duration}},
+{{.Filename}}
+{{- end}}
+`))
+
 // writePlaylist writes the m3u8 file for the current rolling segment window.
 func (s *HLSSubscriber) writePlaylist(dir string, segs []segment) {
 	path := filepath.Join(dir, "index.m3u8")
@@ -205,16 +215,6 @@ func (s *HLSSubscriber) writePlaylist(dir string, segs []segment) {
 	defer f.Close()
 
 	targetDur := s.segmentDuration + 1
-
-	tmpl := template.Must(template.New("m3u8").Parse(`#EXTM3U
-#EXT-X-VERSION:3
-#EXT-X-TARGETDURATION:{{.TargetDuration}}
-#EXT-X-MEDIA-SEQUENCE:{{.MediaSeq}}
-{{- range .Segments}}
-#EXTINF:{{printf "%.3f" .Duration}},
-{{.Filename}}
-{{- end}}
-`))
 
 	type playlistData struct {
 		TargetDuration int
@@ -236,7 +236,7 @@ func (s *HLSSubscriber) writePlaylist(dir string, segs []segment) {
 		}{Duration: seg.duration, Filename: seg.filename})
 	}
 
-	if err := tmpl.Execute(f, data); err != nil {
+	if err := playlistTmpl.Execute(f, data); err != nil {
 		logrus.WithFields(s.fields()).WithError(err).Warnf("hls[%s]: template execute", s.streamKey)
 	}
 }

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"os"
@@ -42,34 +43,33 @@ type subInfo struct {
 // GET /streams
 func (s *Server) listStreams(w http.ResponseWriter, r *http.Request) {
 	streams := s.manager.All()
-	if len(streams) == 0 && s.mtx != nil {
-		paths, err := s.mtx.ListPaths(r.Context())
-		if err == nil {
-			resp := make([]streamResponse, 0, len(paths))
+	resp := make([]streamResponse, 0, len(streams))
+	seen := make(map[string]bool)
+
+	for _, st := range streams {
+		resp = append(resp, s.toStreamResponse(st))
+		seen[st.Key()] = true
+	}
+
+	if s.mtx != nil {
+		if paths, err := s.mtx.ListPaths(r.Context()); err == nil {
 			for _, p := range paths {
-				if !p.Ready {
-					continue
+				if p.Ready && !seen[p.Name] {
+					urls := s.resolveLiveURLs(p.Name)
+					resp = append(resp, streamResponse{
+						Key:            p.Name,
+						NodeID:         "mediamtx",
+						IsLive:         p.Ready,
+						StartedAt:      time.Time{},
+						HLSUrl:         urls.HLS,
+						WebRTCUrl:      urls.WebRTC,
+						WebRTCOfferURL: urls.WebRTCOffer,
+					})
 				}
-				urls := s.resolveLiveURLs(p.Name)
-				resp = append(resp, streamResponse{
-					Key:            p.Name,
-					NodeID:         "mediamtx",
-					IsLive:         p.Ready,
-					StartedAt:      time.Time{},
-					HLSUrl:         urls.HLS,
-					WebRTCUrl:      urls.WebRTC,
-					WebRTCOfferURL: urls.WebRTCOffer,
-				})
 			}
-			writeJSON(w, http.StatusOK, resp)
-			return
 		}
 	}
 
-	resp := make([]streamResponse, 0, len(streams))
-	for _, st := range streams {
-		resp = append(resp, s.toStreamResponse(st))
-	}
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -78,25 +78,9 @@ func (s *Server) getStream(w http.ResponseWriter, r *http.Request) {
 	key := chi.URLParam(r, "key")
 	st, ok := s.manager.Get(key)
 	if !ok {
-		if s.mtx != nil {
-			paths, err := s.mtx.ListPaths(r.Context())
-			if err == nil {
-				for _, p := range paths {
-					if p.Name == key && p.Ready {
-						urls := s.resolveLiveURLs(p.Name)
-						writeJSON(w, http.StatusOK, streamResponse{
-							Key:            p.Name,
-							NodeID:         "mediamtx",
-							IsLive:         true,
-							StartedAt:      time.Time{},
-							HLSUrl:         urls.HLS,
-							WebRTCUrl:      urls.WebRTC,
-							WebRTCOfferURL: urls.WebRTCOffer,
-						})
-						return
-					}
-				}
-			}
+		if resp, found := s.getMediaMTXStream(r.Context(), key); found {
+			writeJSON(w, http.StatusOK, resp)
+			return
 		}
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "stream not found"})
 		return
@@ -110,6 +94,31 @@ func (s *Server) getStream(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) getMediaMTXStream(ctx context.Context, key string) (streamResponse, bool) {
+	if s.mtx == nil {
+		return streamResponse{}, false
+	}
+	paths, err := s.mtx.ListPaths(ctx)
+	if err != nil {
+		return streamResponse{}, false
+	}
+	for _, p := range paths {
+		if p.Name == key && p.Ready {
+			urls := s.resolveLiveURLs(p.Name)
+			return streamResponse{
+				Key:            p.Name,
+				NodeID:         "mediamtx",
+				IsLive:         true,
+				StartedAt:      time.Time{},
+				HLSUrl:         urls.HLS,
+				WebRTCUrl:      urls.WebRTC,
+				WebRTCOfferURL: urls.WebRTCOffer,
+			}, true
+		}
+	}
+	return streamResponse{}, false
 }
 
 // POST /streams/{key}/pin
