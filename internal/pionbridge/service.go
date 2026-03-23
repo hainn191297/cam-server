@@ -21,6 +21,8 @@ import (
 	"go-cam-server/config"
 )
 
+const maxSessions = 100 // Hard limit for concurrent WebRTC sessions
+
 type Service struct {
 	cfg config.PionWebRTCConfig
 
@@ -75,6 +77,13 @@ func (s *Service) HandleOffer(ctx context.Context, streamKey, offerSDP string) (
 		return "", "", fmt.Errorf("offer sdp is required")
 	}
 
+	s.mu.Lock()
+	if len(s.sessions) >= maxSessions {
+		s.mu.Unlock()
+		return "", "", fmt.Errorf("server at maximum capacity for webrtc sessions")
+	}
+	s.mu.Unlock()
+
 	rtspURL := strings.TrimRight(s.cfg.SourceRTSPBaseURL, "/") + "/" + key
 	u, err := base.ParseURL(rtspURL)
 	if err != nil {
@@ -127,20 +136,26 @@ func (s *Service) HandleOffer(ctx context.Context, streamKey, offerSDP string) (
 		senders = append(senders, sender)
 	}
 
+	// Drain RTCP from remote (browser) using a context to avoid leaking goroutines
+	ctxCancel, cancel := context.WithCancel(context.Background())
 	for _, sender := range senders {
-		go drainRTCP(sender)
+		go drainRTCP(ctxCancel, sender)
 	}
 
 	for _, tr := range tracks {
 		trLocal := tr
 		client.OnPacketRTP(trLocal.media, trLocal.forma, func(pkt *rtp.Packet) {
 			if writeErr := trLocal.track.WriteRTP(pkt); writeErr != nil {
-				logrus.Debugf("pion-bridge[%s]: write rtp: %v", key, writeErr)
+				// Don't log closed track errors repeatedly
+				if !isExpectedCloseError(writeErr) {
+					logrus.Debugf("pion-bridge[%s]: write rtp: %v", key, writeErr)
+				}
 			}
 		})
 	}
 
 	if _, err = client.Play(nil); err != nil {
+		cancel()
 		_ = pc.Close()
 		client.Close()
 		return "", "", err
@@ -150,6 +165,7 @@ func (s *Service) HandleOffer(ctx context.Context, streamKey, offerSDP string) (
 		Type: webrtc.SDPTypeOffer,
 		SDP:  offerSDP,
 	}); err != nil {
+		cancel()
 		_ = pc.Close()
 		client.Close()
 		return "", "", err
@@ -158,16 +174,27 @@ func (s *Service) HandleOffer(ctx context.Context, streamKey, offerSDP string) (
 	gatherComplete := webrtc.GatheringCompletePromise(pc)
 	answer, err := pc.CreateAnswer(nil)
 	if err != nil {
+		cancel()
 		_ = pc.Close()
 		client.Close()
 		return "", "", err
 	}
 	if err = pc.SetLocalDescription(answer); err != nil {
+		cancel()
 		_ = pc.Close()
 		client.Close()
 		return "", "", err
 	}
-	<-gatherComplete
+
+	// Wait for ICE gathering with a timeout using the provided request context
+	select {
+	case <-gatherComplete:
+	case <-ctx.Done():
+		cancel()
+		_ = pc.Close()
+		client.Close()
+		return "", "", fmt.Errorf("ice gathering aborted: %w", ctx.Err())
+	}
 
 	id := uuid.NewString()
 	ss := &session{
@@ -182,11 +209,13 @@ func (s *Service) HandleOffer(ctx context.Context, streamKey, offerSDP string) (
 		if st == webrtc.PeerConnectionStateFailed ||
 			st == webrtc.PeerConnectionStateDisconnected ||
 			st == webrtc.PeerConnectionStateClosed {
+			cancel()
 			s.closeSession(id)
 		}
 	})
 
 	go func() {
+		defer cancel()
 		if waitErr := client.Wait(); waitErr != nil && !isExpectedCloseError(waitErr) {
 			logrus.Warnf("pion-bridge[%s]: rtsp ended: %v", key, waitErr)
 		}
@@ -334,11 +363,16 @@ func uniqueMedias(in []*description.Media) []*description.Media {
 	return out
 }
 
-func drainRTCP(sender *webrtc.RTPSender) {
+func drainRTCP(ctx context.Context, sender *webrtc.RTPSender) {
 	buf := make([]byte, 1500)
 	for {
-		if _, _, err := sender.Read(buf); err != nil {
+		select {
+		case <-ctx.Done():
 			return
+		default:
+			if _, _, err := sender.Read(buf); err != nil {
+				return
+			}
 		}
 	}
 }

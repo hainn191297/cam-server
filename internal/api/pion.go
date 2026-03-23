@@ -1,10 +1,12 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"html/template"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/sirupsen/logrus"
@@ -66,7 +68,11 @@ func (s *Server) pionOffer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sessionID, answerSDP, err := s.pion.HandleOffer(r.Context(), key, sdp)
+	// Limit ICE gathering / connection setup to 5 seconds
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	sessionID, answerSDP, err := s.pion.HandleOffer(ctx, key, sdp)
 	if err != nil {
 		logrus.WithError(err).WithField("stream_key", key).Warn("pion.offer.failed")
 		writeJSON(w, http.StatusBadGateway, map[string]string{
