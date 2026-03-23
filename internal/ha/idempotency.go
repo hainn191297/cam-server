@@ -54,64 +54,110 @@ func (s *IdempotencyStore) Do(
 	producer func(context.Context) (CachedResponse, error),
 ) (CachedResponse, bool, error) {
 	if key == "" {
-		resp, err := producer(ctx)
-		return cloneResponse(resp), false, err
+		return s.runWithoutKey(ctx, producer)
 	}
 
 	for {
-		now := s.now()
-		s.lock()
-		s.gcLocked(now)
-
-		if entry, ok := s.entries[key]; ok {
-			if entry.ready && now.Before(entry.expiresAt) {
-				resp := cloneResponse(entry.response)
-				s.unlock()
-				return resp, true, entry.err
-			}
-			if entry.ready {
-				delete(s.entries, key)
-			} else {
-				waitCh := entry.done
-				s.unlock()
-
-				select {
-				case <-ctx.Done():
-					return CachedResponse{}, false, ctx.Err()
-				case <-waitCh:
-				}
-				continue
-			}
+		entry, replay, waitCh, err := s.prepareEntry(ctx, key)
+		if err != nil {
+			return CachedResponse{}, false, err
 		}
-
-		entry := &idempotencyEntry{
-			createdAt: now,
-			expiresAt: now.Add(s.ttl),
-			done:      make(chan struct{}),
+		if replay != nil {
+			return *replay, true, entry.err
 		}
-		s.entries[key] = entry
-		s.enforceMaxKeysLocked()
-		s.unlock()
+		if waitCh != nil {
+			if err := waitForEntry(ctx, waitCh); err != nil {
+				return CachedResponse{}, false, err
+			}
+			continue
+		}
 
 		resp, err := producer(ctx)
 		resp = cloneResponse(resp)
-
-		s.lock()
-		if latest, ok := s.entries[key]; ok && latest == entry {
-			if err != nil {
-				delete(s.entries, key)
-			} else {
-				entry.response = resp
-				entry.expiresAt = s.now().Add(s.ttl)
-			}
-			entry.err = err
-			entry.ready = true
-			close(entry.done)
-		}
-		s.unlock()
-
+		s.finalizeEntry(key, entry, resp, err)
 		return resp, false, err
 	}
+}
+
+func (s *IdempotencyStore) runWithoutKey(
+	ctx context.Context,
+	producer func(context.Context) (CachedResponse, error),
+) (CachedResponse, bool, error) {
+	resp, err := producer(ctx)
+	return cloneResponse(resp), false, err
+}
+
+func (s *IdempotencyStore) prepareEntry(
+	_ context.Context,
+	key string,
+) (*idempotencyEntry, *CachedResponse, chan struct{}, error) {
+	now := s.now()
+	s.lock()
+	defer s.unlock()
+
+	s.gcLocked(now)
+
+	if entry, ok := s.entries[key]; ok {
+		if replay := replayResponse(entry, now); replay != nil {
+			return entry, replay, nil, nil
+		}
+		if entry.ready {
+			delete(s.entries, key)
+		} else {
+			return entry, nil, entry.done, nil
+		}
+	}
+
+	entry := &idempotencyEntry{
+		createdAt: now,
+		expiresAt: now.Add(s.ttl),
+		done:      make(chan struct{}),
+	}
+	s.entries[key] = entry
+	s.enforceMaxKeysLocked()
+	return entry, nil, nil, nil
+}
+
+func replayResponse(entry *idempotencyEntry, now time.Time) *CachedResponse {
+	if !entry.ready || !now.Before(entry.expiresAt) {
+		return nil
+	}
+	resp := cloneResponse(entry.response)
+	return &resp
+}
+
+func waitForEntry(ctx context.Context, waitCh chan struct{}) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-waitCh:
+		return nil
+	}
+}
+
+func (s *IdempotencyStore) finalizeEntry(
+	key string,
+	entry *idempotencyEntry,
+	resp CachedResponse,
+	err error,
+) {
+	s.lock()
+	defer s.unlock()
+
+	latest, ok := s.entries[key]
+	if !ok || latest != entry {
+		return
+	}
+
+	if err != nil {
+		delete(s.entries, key)
+	} else {
+		entry.response = resp
+		entry.expiresAt = s.now().Add(s.ttl)
+	}
+	entry.err = err
+	entry.ready = true
+	close(entry.done)
 }
 
 func cloneResponse(resp CachedResponse) CachedResponse {
