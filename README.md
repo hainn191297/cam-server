@@ -8,7 +8,7 @@
 
 ---
 
-## ⚡ Key Features
+## Key Features
 
 ### 1. Pub/Sub Fan-out Architecture
 The stream model operates as a robust multi-pipeline engine: A single inbound Source (Publisher) seamlessly fans out to infinite outbound Destinations (Subscribers) asynchronously. 
@@ -37,7 +37,7 @@ Cluster-ready design with deep Redis integration handling Distributed Locks, Cam
 
 ---
 
-## 📂 Project Structure
+## Project Structure
 
 ```text
 go-cam-server/
@@ -60,7 +60,7 @@ go-cam-server/
 
 ---
 
-## 🚀 Installation & Getting Started
+## Installation & Getting Started
 
 ### 1. Bootstrapping the Environment (Redis, MediaMTX)
 Use Docker Compose to spin up the satellite services first:
@@ -88,11 +88,11 @@ go build -o bin/server ./cmd/server
 
 ---
 
-## 🛠️ Roadmap & Upcoming Plans
+## Roadmap & Upcoming Plans
 - [x] Core Pub/Sub Fan-out Architecture
 - [x] Zero-GC buffer optimization using `sync.Pool`
 - [ ] Migrate HTTP Streaming from standard `net/http` to Event-Loop Networking (`nbio`) to scale to +100k Concurrent Viewers.
 - [ ] Add Cloud Relay cluster capabilities (Precise Origin-Edge Node communication pattern).
 
 ---
-*Engineered for extreme I/O heat dissipation.* 💪
+*Engineered for extreme I/O heat dissipation.*
