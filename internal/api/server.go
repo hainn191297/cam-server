@@ -35,14 +35,17 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/lesismal/nbio/nbhttp"
 	"github.com/redis/go-redis/v9"
 
 	"go-cam-server/config"
+	"go-cam-server/internal/auth"
 	"go-cam-server/internal/ha"
 	vmsmediamtx "go-cam-server/internal/mediamtx"
 	vmsminio "go-cam-server/internal/minio"
 	"go-cam-server/internal/node"
 	"go-cam-server/internal/pionbridge"
+	"go-cam-server/internal/relay"
 	vmsrtsp "go-cam-server/internal/rtsp"
 	"go-cam-server/internal/stream"
 	"go-cam-server/internal/subscriber"
@@ -67,6 +70,12 @@ type Server struct {
 
 	pins         *pinStore
 	weightsStore *weightsStore
+
+	// Wave 2 additions
+	authSvc      *auth.Service
+	authHandler  *auth.Handler
+	streamEngine *stream.Engine
+	relayManager *relay.Manager
 }
 
 type Dependencies struct {
@@ -78,6 +87,11 @@ type Dependencies struct {
 	Pion        *pionbridge.Service
 	Subscribers *subscriber.Factory
 	Ingest      *vmsrtsp.IngestManager
+
+	// Wave 2 additions
+	Auth         *auth.Service
+	StreamEngine *stream.Engine
+	RelayManager *relay.Manager
 }
 
 func NewServer(cfg *config.Config, deps Dependencies) *Server {
@@ -122,13 +136,34 @@ func NewServer(cfg *config.Config, deps Dependencies) *Server {
 		leaseService:  ha.NewLeaseService(rdb, leaseTTL, leaseSkew, cfg.HA.LeaseTokenSecret),
 		pins:          newPinStore(),
 		weightsStore:  newWeightsStore(),
+
+		// Wave 2
+		authSvc:      deps.Auth,
+		streamEngine: deps.StreamEngine,
+		relayManager: deps.RelayManager,
+	}
+	if s.authSvc != nil {
+		s.authHandler = auth.NewHandler(s.authSvc)
 	}
 	s.router = s.buildRouter()
 	return s
 }
 
 func (s *Server) ListenAndServe() error {
-	return http.ListenAndServe(s.cfg.HTTP.Addr, s.router)
+	engine := nbhttp.NewServer(nbhttp.Config{
+		Network: "tcp",
+		Addrs:   []string{s.cfg.HTTP.Addr},
+		Handler: s.router,
+	})
+
+	err := engine.Start()
+	if err != nil {
+		return err
+	}
+	defer engine.Stop()
+
+	<-make(chan struct{})
+	return nil
 }
 
 func (s *Server) buildRouter() *chi.Mux {
@@ -141,6 +176,26 @@ func (s *Server) buildRouter() *chi.Mux {
 
 	// Mount pprof profiling endpoints
 	r.Mount("/debug", middleware.Profiler())
+
+	// ── Auth routes ───────────────────────────────────────────────────────────
+	if s.authHandler != nil {
+		r.Post("/api/v1/auth/login", s.authHandler.Login)
+		r.Group(func(r chi.Router) {
+			r.Use(s.authSvc.Middleware)
+			r.Get("/api/v1/auth/session", s.authHandler.SessionInfo)
+			r.Delete("/api/v1/auth/session", s.authHandler.Logout)
+
+			// Live session (requires camera:view)
+			r.With(auth.RequirePermission("camera:view")).Post("/api/v1/live-sessions", s.createLiveSessionV1)
+			r.With(auth.RequirePermission("camera:view")).Delete("/api/v1/live-sessions/{viewer_session_id}", s.deleteLiveSessionV1)
+		})
+	}
+
+	// ── Internal relay API ────────────────────────────────────────────────────
+	if s.relayManager != nil {
+		relayHandler := relay.NewHandler(s.relayManager)
+		relayHandler.RegisterRoutes(r)
+	}
 
 	// ── MediaMTX ingest webhooks (called by MediaMTX ready/not-ready hooks) ───
 	r.Post("/internal/on-publish", s.onPublish)
@@ -168,6 +223,7 @@ func (s *Server) buildRouter() *chi.Mux {
 		r.Delete("/streams/{key}/pin", s.unpinStream)
 		r.Get("/live/streams", s.listLiveStreams)
 		r.Get("/live/{key}/urls", s.getLiveURLs)
+		r.Get("/live/{key}/ws", s.liveWebsocket) // nbio websocket
 		r.Post("/live/{key}/session", s.createLiveSession)
 		r.Post("/live/session/reattach", s.reattachLiveSession)
 		r.Post("/pion/webrtc/{key}/offer", s.pionOffer)

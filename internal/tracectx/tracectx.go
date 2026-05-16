@@ -15,14 +15,24 @@ type contextKey string
 
 const traceContextKey contextKey = "trace_context"
 
-// Context carries the minimum trace metadata needed to correlate logs and
-// later bridge into a real OpenTelemetry exporter.
-type Context struct {
-	Traceparent string
-	TraceID     string
-	SpanID      string
-	ParentSpan  string
+// Envelope carries W3C trace state plus the business identifiers used to
+// correlate control-plane, media-plane, and viewer activity.
+type Envelope struct {
+	TraceID         string `json:"trace_id,omitempty"`
+	RequestID       string `json:"request_id,omitempty"`
+	CamID           string `json:"cam_id,omitempty"`
+	StreamID        string `json:"stream_id,omitempty"`
+	ViewerSessionID string `json:"viewer_session_id,omitempty"`
+	NodeID          string `json:"node_id,omitempty"`
+
+	Traceparent string `json:"-"`
+	SpanID      string `json:"-"`
+	ParentSpan  string `json:"-"`
 }
+
+// Context remains as the old package-facing name for compatibility with the
+// existing W3C traceparent callers.
+type Context = Envelope
 
 // ExtractOrNew loads a valid W3C traceparent from the request or creates one.
 func ExtractOrNew(r *http.Request) Context {
@@ -31,10 +41,14 @@ func ExtractOrNew(r *http.Request) Context {
 		strings.TrimSpace(r.URL.Query().Get("traceparent")),
 	} {
 		if tc, ok := Parse(raw); ok {
-			return Child(tc)
+			child := Child(tc)
+			child.RequestID = strings.TrimSpace(r.Header.Get("x-request-id"))
+			return child
 		}
 	}
-	return New()
+	tc := New()
+	tc.RequestID = strings.TrimSpace(r.Header.Get("x-request-id"))
+	return tc
 }
 
 // New creates a root trace context.
@@ -56,18 +70,23 @@ func New() Context {
 // Child creates a new span within the same trace.
 func Child(parent Context) Context {
 	if parent.TraceID == "" {
-		return New()
+		child := New()
+		child.RequestID = parent.RequestID
+		child.CamID = parent.CamID
+		child.StreamID = parent.StreamID
+		child.ViewerSessionID = parent.ViewerSessionID
+		child.NodeID = parent.NodeID
+		return child
 	}
 
 	spanID := make([]byte, 8)
 	fillRandom(spanID)
 	spanIDHex := hex.EncodeToString(spanID)
-	return Context{
-		Traceparent: "00-" + parent.TraceID + "-" + spanIDHex + "-01",
-		TraceID:     parent.TraceID,
-		SpanID:      spanIDHex,
-		ParentSpan:  parent.SpanID,
-	}
+	child := parent
+	child.Traceparent = "00-" + parent.TraceID + "-" + spanIDHex + "-01"
+	child.SpanID = spanIDHex
+	child.ParentSpan = parent.SpanID
+	return child
 }
 
 // Parse validates and decodes a traceparent value.
@@ -91,33 +110,59 @@ func Parse(raw string) (Context, bool) {
 }
 
 func WithContext(ctx context.Context, tc Context) context.Context {
-	return context.WithValue(ctx, traceContextKey, tc)
+	return WithEnvelope(ctx, tc)
 }
 
 func FromContext(ctx context.Context) (Context, bool) {
-	tc, ok := ctx.Value(traceContextKey).(Context)
-	return tc, ok
+	return EnvelopeFromContext(ctx)
+}
+
+// WithEnvelope stores a trace envelope on the context.
+func WithEnvelope(ctx context.Context, envelope Envelope) context.Context {
+	return context.WithValue(ctx, traceContextKey, envelope)
+}
+
+// EnvelopeFromContext loads a trace envelope stored by WithEnvelope or the
+// backwards-compatible WithContext helper.
+func EnvelopeFromContext(ctx context.Context) (Envelope, bool) {
+	envelope, ok := ctx.Value(traceContextKey).(Envelope)
+	return envelope, ok
 }
 
 func Fields(ctx context.Context) logrus.Fields {
-	tc, ok := FromContext(ctx)
+	envelope, ok := EnvelopeFromContext(ctx)
 	if !ok {
 		return logrus.Fields{}
 	}
-	return FieldsFromTrace(tc)
+	return FieldsFromEnvelope(envelope)
 }
 
 func FieldsFromTrace(tc Context) logrus.Fields {
-	if tc.Traceparent == "" || tc.TraceID == "" || tc.SpanID == "" {
-		return logrus.Fields{}
+	return FieldsFromEnvelope(tc)
+}
+
+// FieldsFromEnvelope returns structured log fields for every known envelope
+// identifier and only emits W3C span data when the trace state is complete.
+func FieldsFromEnvelope(envelope Envelope) logrus.Fields {
+	fields := logrus.Fields{}
+	if envelope.Traceparent != "" && envelope.TraceID != "" && envelope.SpanID != "" {
+		fields["trace_id"] = envelope.TraceID
+		fields["traceparent"] = envelope.Traceparent
+		fields["span_id"] = envelope.SpanID
+		if envelope.ParentSpan != "" {
+			fields["parent_span_id"] = envelope.ParentSpan
+		}
 	}
-	fields := logrus.Fields{
-		"trace_id":    tc.TraceID,
-		"traceparent": tc.Traceparent,
-		"span_id":     tc.SpanID,
-	}
-	if tc.ParentSpan != "" {
-		fields["parent_span_id"] = tc.ParentSpan
+	for name, value := range map[string]string{
+		"request_id":        envelope.RequestID,
+		"cam_id":            envelope.CamID,
+		"stream_id":         envelope.StreamID,
+		"viewer_session_id": envelope.ViewerSessionID,
+		"node_id":           envelope.NodeID,
+	} {
+		if value != "" {
+			fields[name] = value
+		}
 	}
 	return fields
 }

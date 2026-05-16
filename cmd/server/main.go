@@ -43,12 +43,14 @@ import (
 
 	"go-cam-server/config"
 	"go-cam-server/internal/api"
+	"go-cam-server/internal/auth"
 	vmslogging "go-cam-server/internal/logging"
 	vmsmediamtx "go-cam-server/internal/mediamtx"
 	vmsmediamtxproc "go-cam-server/internal/mediamtxproc"
 	vmsminio "go-cam-server/internal/minio"
 	"go-cam-server/internal/node"
 	"go-cam-server/internal/pionbridge"
+	"go-cam-server/internal/relay"
 	vmsredis "go-cam-server/internal/redis"
 	vmsrtsp "go-cam-server/internal/rtsp"
 	"go-cam-server/internal/stream"
@@ -123,23 +125,51 @@ func main() {
 		logrus.Info("node-registry: disabled (no Redis)")
 	}
 
-	// Hook: when a stream is registered/unregistered, sync to Redis
+	// Sync stream lifecycle events to Redis so peer nodes can locate streams.
 	if registry != nil {
-		// TODO: hook into StreamManager events to call registry.AnnounceStream
-		// For now this is done by explicit control paths outside StreamManager.
-		_ = registry
+		manager.OnRegister = func(streamKey, _ string) {
+			if err := registry.AnnounceStream(context.Background(), streamKey); err != nil {
+				logrus.WithError(err).WithField("stream_key", streamKey).Warn("registry.announce_stream: failed")
+			}
+		}
+		manager.OnUnregister = func(streamKey string) {
+			if err := registry.RevokeStream(context.Background(), streamKey); err != nil {
+				logrus.WithError(err).WithField("stream_key", streamKey).Warn("registry.revoke_stream: failed")
+			}
+		}
 	}
+
+	// ─── Auth ────────────────────────────────────────────────────────────────
+	authStore := auth.NewStore()
+	jwtSvc := auth.NewJWTService(cfg.Auth.JWTSecret, cfg.Auth.TokenTTLHours)
+	authSvc := auth.NewService(authStore, jwtSvc)
+	if _, err := authSvc.SeedAdmin(cfg.Auth.SeedAdminUser, cfg.Auth.SeedAdminPass); err != nil {
+		logrus.Fatalf("auth.seed: %v", err)
+	}
+
+	// ─── Stream Engine ───────────────────────────────────────────────────────
+	// Always created; ingestMgr may be nil (mediamtx disabled), in which case
+	// EnsureStream returns a clear error instead of panicking.
+	streamEngine := stream.NewEngine(manager, ingestMgr)
+
+	// ─── Relay ───────────────────────────────────────────────────────────────
+	relayTokenSvc := relay.NewTokenService(cfg.Relay.Secret)
+	relayMgr := relay.NewManager(relayTokenSvc, cfg.Relay.BaseURL)
+	relayMgr.StartReaper(time.Duration(cfg.Relay.IdleTimeout) * time.Second)
 
 	// ─── HTTP API Server ──────────────────────────────────────────────────────
 	apiServer := api.NewServer(cfg, api.Dependencies{
-		Manager:     manager,
-		Redis:       rdb,
-		Registry:    registry,
-		MediaMTX:    mtxClient,
-		MinIO:       minioClient,
-		Pion:        pionService,
-		Subscribers: subFactory,
-		Ingest:      ingestMgr,
+		Manager:      manager,
+		Redis:        rdb,
+		Registry:     registry,
+		MediaMTX:     mtxClient,
+		MinIO:        minioClient,
+		Pion:         pionService,
+		Subscribers:  subFactory,
+		Ingest:       ingestMgr,
+		Auth:         authSvc,
+		StreamEngine: streamEngine,
+		RelayManager: relayMgr,
 	})
 
 	// ─── Graceful shutdown ────────────────────────────────────────────────────

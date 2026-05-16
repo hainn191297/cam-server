@@ -16,6 +16,13 @@ import (
 type StreamManager struct {
 	mu      sync.RWMutex
 	streams map[string]*liveStream
+
+	// Optional hooks called outside the lock after state changes.
+	// OnRegister is called when a new stream is registered; nodeID is the
+	// publisher's node identifier.
+	OnRegister func(streamKey, nodeID string)
+	// OnUnregister is called when a stream is removed.
+	OnUnregister func(streamKey string)
 }
 
 func NewStreamManager() *StreamManager {
@@ -37,7 +44,12 @@ func (m *StreamManager) Register(pub Publisher) (Stream, error) {
 
 	s := newLiveStream(key, pub)
 	m.streams[key] = s
-	logrus.WithFields(streamFields(key, pub.NodeID(), traceContextFromPublisher(pub))).Info("stream_manager.registered")
+	nodeID := pub.NodeID()
+	logrus.WithFields(streamFields(key, nodeID, traceContextFromPublisher(pub))).Info("stream_manager.registered")
+
+	if m.OnRegister != nil {
+		go m.OnRegister(key, nodeID)
+	}
 	return s, nil
 }
 
@@ -53,6 +65,9 @@ func (m *StreamManager) Unregister(key string) {
 	if ok {
 		s.Close()
 		logrus.WithFields(streamFields(key, "", s.traceContext())).Info("stream_manager.unregistered")
+		if m.OnUnregister != nil {
+			go m.OnUnregister(key)
+		}
 	}
 }
 

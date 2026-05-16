@@ -4,6 +4,10 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/lesismal/nbio/nbhttp/websocket"
+	"github.com/sirupsen/logrus"
+	"go-cam-server/internal/stream"
+	"go-cam-server/internal/subscriber"
 )
 
 // GET /live/streams
@@ -138,4 +142,53 @@ func (s *Server) listPlaybackTimespans(w http.ResponseWriter, r *http.Request) {
 		"available_total": availableTotal,
 		"timespans":       segments,
 	})
+}
+
+// GET /live/{key}/ws
+//
+// Streams raw AVPacket payload over nbio websocket.
+func (s *Server) liveWebsocket(w http.ResponseWriter, r *http.Request) {
+	key := chi.URLParam(r, "key")
+	if key == "" {
+		http.Error(w, "stream key is required", http.StatusBadRequest)
+		return
+	}
+
+	st, ok := s.manager.Get(key)
+	if !ok {
+		http.Error(w, "stream not found", http.StatusNotFound)
+		return
+	}
+
+	upgrader := websocket.NewUpgrader()
+	
+	upgrader.OnOpen(func(c *websocket.Conn) {
+		viewerID := c.RemoteAddr().String()
+		
+		sub := subscriber.NewLivestreamSubscriber(viewerID, func(pkt *stream.AVPacket) error {
+			// Write AV payload (e.g. valid FLV chunk or frame data).
+			// nbio's WriteMessage internally manages its async write queue.
+			return c.WriteMessage(websocket.BinaryMessage, pkt.Data)
+		})
+		
+		c.SetSession(sub)
+		st.AddSubscriber(sub)
+		sub.SendGOP()
+	})
+
+	upgrader.OnClose(func(c *websocket.Conn, err error) {
+		if sess := c.Session(); sess != nil {
+			if sub, ok := sess.(*subscriber.LivestreamSubscriber); ok {
+				st.RemoveSubscriber(sub.ID())
+				sub.Close()
+			}
+		}
+	})
+
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		logrus.WithFields(logrus.Fields{"key": key}).Errorf("websocket upgrade failed: %v", err)
+		return
+	}
+	_ = conn // connection is successfully handed over to nbio event loop
 }

@@ -28,16 +28,13 @@ const (
 // but the transport is injected rather than hard-coded.
 type LivestreamSubscriber struct {
 	id      string
-	ch      chan *stream.AVPacket
 	dropped atomic.Uint64
-	done    chan struct{}
 
 	// gopCache stores the last keyframe group for late-joining viewers.
 	gopMu    sync.Mutex
 	gopCache []*stream.AVPacket
 
-	// onPkt is called for each packet in the viewer's goroutine.
-	// Returning an error closes the subscriber.
+	// onPkt is called for each packet synchronously (non-blocking in nbio).
 	onPkt func(pkt *stream.AVPacket) error
 }
 
@@ -46,11 +43,8 @@ type LivestreamSubscriber struct {
 func NewLivestreamSubscriber(id string, onPkt func(pkt *stream.AVPacket) error) *LivestreamSubscriber {
 	s := &LivestreamSubscriber{
 		id:    fmt.Sprintf("live-%s", id),
-		ch:    make(chan *stream.AVPacket, livestreamBufSize),
-		done:  make(chan struct{}),
 		onPkt: onPkt,
 	}
-	go s.run()
 	return s
 }
 
@@ -60,20 +54,19 @@ func (s *LivestreamSubscriber) DroppedPackets() uint64      { return s.dropped.L
 
 func (s *LivestreamSubscriber) Deliver(pkt *stream.AVPacket) {
 	s.updateGOP(pkt)
-	select {
-	case s.ch <- pkt:
-	default:
+	if err := s.onPkt(pkt); err != nil {
 		s.dropped.Add(1)
-		pkt.Release()
 	}
+	pkt.Release()
 }
 
 func (s *LivestreamSubscriber) Close() {
-	select {
-	case <-s.done:
-	default:
-		close(s.done)
+	s.gopMu.Lock()
+	for _, p := range s.gopCache {
+		p.Release()
 	}
+	s.gopCache = nil
+	s.gopMu.Unlock()
 }
 
 // SendGOP sends the cached GOP immediately to the viewer.
@@ -95,44 +88,7 @@ func (s *LivestreamSubscriber) SendGOP() {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-func (s *LivestreamSubscriber) run() {
-	defer func() {
-		// Drain channel to release remaining packets
-		for {
-			select {
-			case pkt := <-s.ch:
-				pkt.Release()
-			default:
-				// Release GOP cache on exit
-				s.gopMu.Lock()
-				for _, p := range s.gopCache {
-					p.Release()
-				}
-				s.gopCache = nil
-				s.gopMu.Unlock()
-				return
-			}
-		}
-	}()
-
-	for {
-		select {
-		case pkt, ok := <-s.ch:
-			if !ok {
-				return
-			}
-			err := s.onPkt(pkt)
-			pkt.Release()
-			if err != nil {
-				logrus.Infof("live[%s]: viewer disconnected: %v", s.id, err)
-				return
-			}
-		case <-s.done:
-			logrus.Infof("live[%s]: closed", s.id)
-			return
-		}
-	}
-}
+// (run method removed)
 
 // updateGOP maintains the GOP cache: resets on every video keyframe.
 func (s *LivestreamSubscriber) updateGOP(pkt *stream.AVPacket) {

@@ -51,7 +51,7 @@ go-cam-server/
 │   ├── minio/           # Cloud Storage interactions (S3 API Client)
 │   ├── onvif/           # SOAP message payload constructions 
 │   ├── rtsp/            # Ingester pulling streams from MediaMTX to Go Engine
-│   ├── stream/          # The Core Pub/Sub Spiderweb (AVPacket, Fan-out) 🧠
+│   ├── stream/          # The Core Pub/Sub Spiderweb (AVPacket, Fan-out)
 │   └── subscriber/      # Output Logic Branches (HLS, Minio, Relay...)
 ├── pkg/                 # Shared utilities
 ├── docker-compose.yml   # Dev cluster with Redis & mock S3 setup

@@ -22,6 +22,22 @@ type Config struct {
 	MediaMTXProc MediaMTXProcConfig `yaml:"media_mtx_proc"`
 	PionWebRTC   PionWebRTCConfig   `yaml:"pion_webrtc"`
 	Logging      LoggingConfig      `yaml:"logging"`
+	Auth         AuthConfig         `yaml:"auth"`
+	Relay        RelayConfig        `yaml:"relay"`
+}
+
+type AuthConfig struct {
+	JWTSecret      string `yaml:"jwt_secret"`
+	TokenTTLHours  int    `yaml:"token_ttl_hours"`
+	SeedAdminUser  string `yaml:"seed_admin_user"`
+	SeedAdminPass  string `yaml:"seed_admin_pass"`
+	RateLimitBurst int    `yaml:"rate_limit_burst"`
+}
+
+type RelayConfig struct {
+	Secret      string `yaml:"secret"`
+	BaseURL     string `yaml:"base_url"`
+	IdleTimeout int    `yaml:"idle_timeout_seconds"`
 }
 
 type RTMPConfig struct {
@@ -234,6 +250,16 @@ func defaults() *Config {
 				TimeoutMs: 1500,
 				QueueSize: 2048,
 			},
+		},
+		Auth: AuthConfig{
+			TokenTTLHours:  8,
+			SeedAdminUser:  "admin",
+			RateLimitBurst: 10,
+		},
+		Relay: RelayConfig{
+			Secret:      "dev-relay-secret-change-me",
+			BaseURL:     "http://localhost:8080",
+			IdleTimeout: 60,
 		},
 	}
 }
