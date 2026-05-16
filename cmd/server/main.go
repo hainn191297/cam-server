@@ -39,11 +39,17 @@ import (
 	"syscall"
 	"time"
 
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/pem"
+
+	"github.com/google/uuid"
 	"github.com/sirupsen/logrus"
 
 	"go-cam-server/config"
 	"go-cam-server/internal/api"
 	"go-cam-server/internal/auth"
+	"go-cam-server/internal/camera"
 	vmslogging "go-cam-server/internal/logging"
 	vmsmediamtx "go-cam-server/internal/mediamtx"
 	vmsmediamtxproc "go-cam-server/internal/mediamtxproc"
@@ -139,13 +145,43 @@ func main() {
 		}
 	}
 
-	// ─── Auth ────────────────────────────────────────────────────────────────
+	// ─── Auth + RBAC ─────────────────────────────────────────────────────────
+	// L1: in-memory RBAC store — always present, O(1) permission checks.
+	memRBAC := auth.NewInMemRBACStore()
+	var rbacStore auth.RBACStore = memRBAC
+
+	// L2: Redis RBAC store — persist + share across nodes when Redis available.
+	if rdb != nil {
+		redisRBAC := auth.NewRedisRBACStore(rdb)
+		layered := auth.NewLayeredRBACStore(memRBAC, redisRBAC)
+		if err := layered.WarmFrom(ctx, redisRBAC); err != nil {
+			logrus.Warnf("rbac: warm from Redis failed: %v", err)
+		}
+		rbacStore = layered
+	} else {
+		logrus.Info("rbac: running in-memory only (no Redis)")
+	}
+
+	rsaKey := loadRSAKey(cfg.Auth)
+
 	authStore := auth.NewStore()
-	jwtSvc := auth.NewJWTService(cfg.Auth.JWTSecret, cfg.Auth.TokenTTLHours)
-	authSvc := auth.NewService(authStore, jwtSvc)
-	if _, err := authSvc.SeedAdmin(cfg.Auth.SeedAdminUser, cfg.Auth.SeedAdminPass); err != nil {
+	jwtSvc := auth.NewJWTService(rsaKey, cfg.Auth.TokenTTLHours)
+	authSvc := auth.NewService(authStore, jwtSvc, rbacStore)
+
+	if err := authSvc.SeedRBAC(ctx); err != nil {
+		logrus.Fatalf("rbac.seed: %v", err)
+	}
+	if _, err := authSvc.SeedAdmin(ctx, cfg.Auth.SeedAdminUser, cfg.Auth.SeedAdminPass); err != nil {
 		logrus.Fatalf("auth.seed: %v", err)
 	}
+
+	// ─── Camera Registry ─────────────────────────────────────────────────────
+	tenantID, err := uuid.NewV7()
+	if err != nil {
+		logrus.Fatalf("camera: generate tenant_id: %v", err)
+	}
+	camStore := camera.NewStore()
+	camSvc := camera.NewService(camStore, cfg.Node.ID, tenantID.String())
 
 	// ─── Stream Engine ───────────────────────────────────────────────────────
 	// Always created; ingestMgr may be nil (mediamtx disabled), in which case
@@ -170,6 +206,7 @@ func main() {
 		Auth:         authSvc,
 		StreamEngine: streamEngine,
 		RelayManager: relayMgr,
+		Camera:       camSvc,
 	})
 
 	// ─── Graceful shutdown ────────────────────────────────────────────────────
@@ -198,6 +235,68 @@ func main() {
 	}
 
 	logrus.Info("shutdown complete")
+}
+
+// loadRSAKey resolves the RSA private key from config in priority order:
+//  1. RSAPrivateKeyPath — read PEM from file (production)
+//  2. RSAPrivateKeyPEM  — use inline PEM string (containers / env injection)
+//  3. Neither set       — generate an ephemeral 2048-bit key (dev only, warn loudly)
+func loadRSAKey(cfg config.AuthConfig) *rsa.PrivateKey {
+	var pemBytes []byte
+
+	switch {
+	case cfg.RSAPrivateKeyPath != "":
+		b, err := os.ReadFile(cfg.RSAPrivateKeyPath)
+		if err != nil {
+			logrus.Fatalf("auth: read RSA key file %q: %v", cfg.RSAPrivateKeyPath, err)
+		}
+		pemBytes = b
+
+	case cfg.RSAPrivateKeyPEM != "":
+		pemBytes = []byte(cfg.RSAPrivateKeyPEM)
+
+	default:
+		logrus.Warn("auth: no RSA key configured — generating ephemeral key (tokens invalid across restarts, dev only)")
+		key, err := auth.GenerateRSAKey()
+		if err != nil {
+			logrus.Fatalf("auth: generate ephemeral RSA key: %v", err)
+		}
+		return key
+	}
+
+	block, _ := pem.Decode(pemBytes)
+	if block == nil {
+		logrus.Fatalf("auth: RSA key PEM is empty or malformed")
+	}
+
+	var key *rsa.PrivateKey
+	var err error
+
+	switch block.Type {
+	case "RSA PRIVATE KEY": // PKCS#1
+		key, err = x509.ParsePKCS1PrivateKey(block.Bytes)
+	case "PRIVATE KEY": // PKCS#8
+		parsed, e := x509.ParsePKCS8PrivateKey(block.Bytes)
+		if e != nil {
+			logrus.Fatalf("auth: parse PKCS#8 key: %v", e)
+		}
+		var ok bool
+		key, ok = parsed.(*rsa.PrivateKey)
+		if !ok {
+			logrus.Fatalf("auth: PKCS#8 key is not an RSA key")
+		}
+	default:
+		logrus.Fatalf("auth: unsupported PEM block type %q (want RSA PRIVATE KEY or PRIVATE KEY)", block.Type)
+	}
+
+	if err != nil {
+		logrus.Fatalf("auth: parse RSA key: %v", err)
+	}
+	if key.N.BitLen() < 2048 {
+		logrus.Warnf("auth: RSA key is %d bits — 2048 minimum recommended", key.N.BitLen())
+	}
+	logrus.Infof("auth: loaded RSA key (%d bits)", key.N.BitLen())
+	return key
 }
 
 func startRuntimeStatsEmitter(intervalSec int, manager *stream.StreamManager) chan struct{} {

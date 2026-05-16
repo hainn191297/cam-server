@@ -84,6 +84,7 @@ func (s *Server) createLiveSessionV1(w http.ResponseWriter, r *http.Request) {
 		RelaySessionID:     viewerSessionID,
 		StreamID:           streamID,
 		CamID:              req.CamID,
+		ProfileID:          req.ProfileID,
 		RequestedProtocols: protocols,
 		TokenExpiresAt:     expiresAt,
 	})

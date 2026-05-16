@@ -29,8 +29,5 @@ recordings/
 .env.*
 !.env.example
 
-# Custom tools
-mise.toml
-
 # Docker local mount
 data/

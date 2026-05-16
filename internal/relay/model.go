@@ -26,6 +26,7 @@ type Session struct {
 	RelaySessionID string
 	StreamID       string
 	CamID          string
+	ProfileID      string
 	Protocol       Protocol
 	Endpoint       string
 	Token          string
@@ -35,6 +36,11 @@ type Session struct {
 
 	mu    sync.RWMutex
 	state SessionState
+}
+
+// StreamKey returns the canonical "cam_id/profile_id" key for this session.
+func (s *Session) StreamKey() string {
+	return s.CamID + "/" + s.ProfileID
 }
 
 func (s *Session) State() SessionState {
@@ -54,6 +60,7 @@ type CreateSessionRequest struct {
 	RelaySessionID     string     `json:"relay_session_id"`
 	StreamID           string     `json:"stream_id"`
 	CamID              string     `json:"cam_id"`
+	ProfileID          string     `json:"profile_id"`
 	RequestedProtocols []Protocol `json:"requested_protocols"`
 	TokenExpiresAt     time.Time  `json:"token_expires_at"`
 }

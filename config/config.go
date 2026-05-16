@@ -27,7 +27,15 @@ type Config struct {
 }
 
 type AuthConfig struct {
-	JWTSecret      string `yaml:"jwt_secret"`
+	// RSAPrivateKeyPath is the path to a PEM-encoded RSA private key file.
+	// Preferred for production. Takes priority over RSAPrivateKeyPEM.
+	RSAPrivateKeyPath string `yaml:"rsa_private_key_path"`
+
+	// RSAPrivateKeyPEM is an inline PEM-encoded RSA private key.
+	// Useful for container environments where secrets are injected as env vars.
+	// Ignored when RSAPrivateKeyPath is set.
+	RSAPrivateKeyPEM string `yaml:"rsa_private_key_pem"`
+
 	TokenTTLHours  int    `yaml:"token_ttl_hours"`
 	SeedAdminUser  string `yaml:"seed_admin_user"`
 	SeedAdminPass  string `yaml:"seed_admin_pass"`

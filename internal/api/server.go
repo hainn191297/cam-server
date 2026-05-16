@@ -40,6 +40,7 @@ import (
 
 	"go-cam-server/config"
 	"go-cam-server/internal/auth"
+	"go-cam-server/internal/camera"
 	"go-cam-server/internal/ha"
 	vmsmediamtx "go-cam-server/internal/mediamtx"
 	vmsminio "go-cam-server/internal/minio"
@@ -76,6 +77,9 @@ type Server struct {
 	authHandler  *auth.Handler
 	streamEngine *stream.Engine
 	relayManager *relay.Manager
+
+	// Wave 3
+	camSvc *camera.Service
 }
 
 type Dependencies struct {
@@ -92,6 +96,9 @@ type Dependencies struct {
 	Auth         *auth.Service
 	StreamEngine *stream.Engine
 	RelayManager *relay.Manager
+
+	// Wave 3
+	Camera *camera.Service
 }
 
 func NewServer(cfg *config.Config, deps Dependencies) *Server {
@@ -141,6 +148,9 @@ func NewServer(cfg *config.Config, deps Dependencies) *Server {
 		authSvc:      deps.Auth,
 		streamEngine: deps.StreamEngine,
 		relayManager: deps.RelayManager,
+
+		// Wave 3
+		camSvc: deps.Camera,
 	}
 	if s.authSvc != nil {
 		s.authHandler = auth.NewHandler(s.authSvc)
@@ -186,8 +196,23 @@ func (s *Server) buildRouter() *chi.Mux {
 			r.Delete("/api/v1/auth/session", s.authHandler.Logout)
 
 			// Live session (requires camera:view)
-			r.With(auth.RequirePermission("camera:view")).Post("/api/v1/live-sessions", s.createLiveSessionV1)
-			r.With(auth.RequirePermission("camera:view")).Delete("/api/v1/live-sessions/{viewer_session_id}", s.deleteLiveSessionV1)
+			r.With(s.authSvc.RequirePermission("camera:view")).Post("/api/v1/live-sessions", s.createLiveSessionV1)
+			r.With(s.authSvc.RequirePermission("camera:view")).Delete("/api/v1/live-sessions/{viewer_session_id}", s.deleteLiveSessionV1)
+
+			// User management (requires user:manage)
+			r.With(s.authSvc.RequirePermission("user:manage")).Post("/api/v1/users", s.createUser)
+			r.With(s.authSvc.RequirePermission("user:manage")).Get("/api/v1/users", s.listUsers)
+			r.With(s.authSvc.RequirePermission("user:manage")).Get("/api/v1/users/{user_id}", s.getUser)
+			r.With(s.authSvc.RequirePermission("user:manage")).Delete("/api/v1/users/{user_id}", s.deleteUser)
+			r.With(s.authSvc.RequirePermission("user:manage")).Patch("/api/v1/users/{user_id}/roles", s.updateUserRoles)
+
+			// Camera registry (Wave 3 — F-01)
+			if s.camSvc != nil {
+				r.With(s.authSvc.RequirePermission("camera:manage")).Post("/api/v1/cameras", s.createCamera)
+				r.With(s.authSvc.RequirePermission("camera:view")).Get("/api/v1/cameras", s.listCameras)
+				r.With(s.authSvc.RequirePermission("camera:view")).Get("/api/v1/cameras/{cam_id}", s.getCamera)
+				r.With(s.authSvc.RequirePermission("camera:manage")).Delete("/api/v1/cameras/{cam_id}", s.deleteCamera)
+			}
 		})
 	}
 
@@ -203,6 +228,11 @@ func (s *Server) buildRouter() *chi.Mux {
 
 	// ── Inter-node relay (raw FLV stream, no JSON content-type) ──────────────
 	r.Get("/relay/{key}", s.serveRelay)
+
+	// ── Relay live delivery (viewer-facing, relay JWT required) ───────────────
+	// GET /relay/live/{protocol}/{relay_session_id}
+	// Serves HLS playlist or returns WebRTC offer URL for an active relay session.
+	r.Get("/relay/live/{protocol}/{relay_session_id}", s.serveRelayLiveStream)
 
 	// ── HLS & Storage (binary/static, no JSON content-type) ──────────────────
 	r.Get("/hls/{key}/index.m3u8", s.serveHLSPlaylist)

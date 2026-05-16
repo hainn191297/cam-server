@@ -62,7 +62,7 @@ func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) SessionInfo(w http.ResponseWriter, r *http.Request) {
 	sess, _ := SessionFromContext(r.Context())
 	u, _ := UserFromContext(r.Context())
-	info := h.svc.GetSessionInfo(sess, u)
+	info := h.svc.GetSessionInfo(r.Context(), sess, u)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(info)
 }

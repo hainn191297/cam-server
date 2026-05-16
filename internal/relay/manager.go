@@ -44,6 +44,7 @@ func (m *Manager) Create(req CreateSessionRequest) (*CreateSessionResponse, erro
 		RelaySessionID: req.RelaySessionID,
 		StreamID:       req.StreamID,
 		CamID:          req.CamID,
+		ProfileID:      req.ProfileID,
 		Protocol:       proto,
 		Endpoint:       fmt.Sprintf("%s/relay/live/%s/%s", m.baseURL, proto, req.RelaySessionID),
 		TokenExpiresAt: req.TokenExpiresAt,
@@ -102,6 +103,30 @@ func (m *Manager) Get(relaySessionID string) (*Session, bool) {
 	defer m.mu.RUnlock()
 	s, ok := m.sessions[relaySessionID]
 	return s, ok
+}
+
+// VerifyAndGetSession validates the relay JWT, confirms the session_id matches,
+// looks up the live session, and updates LastActiveAt.
+func (m *Manager) VerifyAndGetSession(signed, relaySessionID string) (*Session, error) {
+	claims, err := m.tokens.Verify(signed)
+	if err != nil {
+		return nil, fmt.Errorf("relay token invalid: %w", err)
+	}
+	if claims.RelaySessionID != relaySessionID {
+		return nil, fmt.Errorf("relay session id mismatch")
+	}
+
+	m.mu.Lock()
+	sess, ok := m.sessions[relaySessionID]
+	if ok {
+		sess.LastActiveAt = time.Now()
+	}
+	m.mu.Unlock()
+
+	if !ok {
+		return nil, fmt.Errorf("relay session not found or expired")
+	}
+	return sess, nil
 }
 
 // ActiveCount returns the number of active sessions.

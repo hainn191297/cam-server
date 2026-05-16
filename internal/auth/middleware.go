@@ -35,12 +35,18 @@ func (s *Service) Middleware(next http.Handler) http.Handler {
 	})
 }
 
-// RequirePermission returns middleware that checks a specific permission.
-func RequirePermission(perm string) func(http.Handler) http.Handler {
+// RequirePermission returns middleware that enforces a named permission.
+// It is a method on *Service so it can call s.UserHasPermission (which
+// delegates to the RBACStore — always an O(1) in-memory lookup).
+func (s *Service) RequirePermission(perm string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			u, ok := UserFromContext(r.Context())
-			if !ok || !u.Role.HasPermission(perm) {
+			if !ok {
+				writeAuthError(w, http.StatusUnauthorized, "unauthorized", "missing auth context")
+				return
+			}
+			if !s.UserHasPermission(r.Context(), u.UserID, perm) {
 				writeAuthError(w, http.StatusForbidden, "forbidden", "missing permission: "+perm)
 				return
 			}
